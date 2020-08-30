@@ -1,4 +1,6 @@
 use druid::{widget::*, *};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 mod arrangement;
 mod audio;
@@ -6,33 +8,175 @@ mod deligate;
 
 use arrangement::*;
 
-const ADD_TRACK: Selector<()> = Selector::new("track-add-track");
-const REMOVE_TRACK: Selector<()> = Selector::new("track-remove-track");
+mod commands {
+    use druid::Selector;
+
+    pub const AUDIO_ENGINE_SET_PLAY_TIME: Selector<f64> =
+        Selector::new("audio-engine.set-play-time");
+
+    pub const SELECT_AUDIO_BLOCK: Selector<usize> = Selector::new("select-audio-block");
+
+    pub const ARRANGEMENT_ADD_TRACK: Selector<()> = Selector::new("arrangement.add-track");
+    pub const ARRANGEMENT_REMOVE_TRACK: Selector<usize> = Selector::new("arrangement.remove-track");
+
+    pub const ARRANGEMENT_UPDATE_PLAY_LINE: Selector<f64> =
+        Selector::new("arrangement.update-play-line");
+    //pub const ARRANGEMENT_ADD_BLOCK: Selector<>
+}
+
+mod settings {
+    use druid::Key;
+
+    pub const ARRANGEMENT_SCROLL_SPEED: Key<f64> = Key::new("arrangement.scroll-speed");
+    pub const ARRANGEMENT_BEAT_SIZE: Key<f64> = Key::new("arrangement.beat-size");
+
+    pub fn default(env: &mut druid::Env) {
+        env.set(ARRANGEMENT_SCROLL_SPEED, 0.1);
+        env.set(ARRANGEMENT_BEAT_SIZE, 10.0);
+    }
+}
 
 mod theme {
     use druid::{Color, Key};
 
-    pub const BORDER_COLOR: Key<Color> = Key::new("border-color");
-    pub const BORDER_WIDTH: Key<f64> = Key::new("border-width");
+    pub const BORDER_COLOR: Key<Color> = Key::new("general.border-color");
+    pub const BORDER_WIDTH: Key<f64> = Key::new("general.border-width");
+
+    pub const ARRANGEMENT_BEAT_LINE_WIDTH: Key<f64> = Key::new("arrangement.beat-line-width");
+    pub const ARRANGEMENT_BEAT_LINE_COLOR: Key<Color> = Key::new("arrangement.beat-line-color");
+    pub const ARRANGEMENT_TACT_LINE_COLOR: Key<Color> = Key::new("arrangement.tact-line-color");
+    pub const ARRANGEMENT_PLAY_LINE_WIDTH: Key<f64> = Key::new("arrangement.play-line-width");
+    pub const ARRANGEMENT_PLAY_LINE_COLOR: Key<Color> = Key::new("arrangement.play-line-color");
 
     pub fn default(env: &mut druid::Env) {
         env.set(BORDER_COLOR, Color::WHITE);
         env.set(BORDER_WIDTH, 2.0);
+
+        env.set(ARRANGEMENT_BEAT_LINE_WIDTH, 1.0);
+        env.set(ARRANGEMENT_BEAT_LINE_COLOR, Color::rgb(0.2, 0.2, 0.2));
+        env.set(ARRANGEMENT_TACT_LINE_COLOR, Color::rgb(0.3, 0.3, 0.3));
+        env.set(ARRANGEMENT_PLAY_LINE_WIDTH, 3.5);
+        env.set(ARRANGEMENT_PLAY_LINE_COLOR, Color::rgb(0.5, 0.5, 0.5));
     }
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, druid::Data)]
+pub struct AudioBlockID(pub usize);
+
+#[derive(Clone, druid::Data)]
+pub struct AudioBlock {
+    audio_id: audio::AudioID,
+    name: String,
+    len_beats: usize,
+    color: Color,
 }
 
 #[derive(Clone, Data, Lens)]
 pub struct AppState {
     pub arrangement: arrangement::Arrangement,
+    pub audio_blocks: Arc<Vec<AudioBlock>>,
+    pub selected_audio_block: Option<usize>,
+    pub next_audio_block_id: AudioBlockID,
+    pub playing: bool,
+    pub audio_engine_handle: audio::AudioEngineHandle,
+}
+
+fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
+    const NUM_COLORS: u32 = 20;
+
+    let mut block_color_pick = Flex::column();
+
+    for i in 0..NUM_COLORS {
+        let color = Color::hlc(i as f64 / NUM_COLORS as f64 * 360.0, 70.0, 127.0);
+
+        block_color_pick.add_child(
+            Painter::new(move |ctx, _, _| {
+                let rect = Rect::from_origin_size((0.0, 0.0), ctx.size()).to_rounded_rect(5.0);
+                ctx.fill(rect, &color);
+            })
+            .fix_size(30.0, 10.0),
+        );
+        block_color_pick.add_spacer(2.0);
+    }
+
+    Box::new(
+        Flex::row()
+            .with_child(
+                Scroll::new(block_color_pick)
+                    .vertical()
+                    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+                    .rounded(5.0),
+            )
+            .align_left()
+            .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+            .rounded(5.0)
+            .lens(lens::Id.index(*selected).in_arc())
+            .lens(AppState::audio_blocks),
+    )
+}
+
+fn create_block_list() -> impl Widget<AppState> {
+    Scroll::new(List::new(|| {
+        Flex::column()
+            .with_child(Label::dynamic(|data: &AudioBlock, _| data.name.clone()))
+            .fix_size(40.0, 40.0)
+            .background(Painter::new(|ctx, data: &AudioBlock, _| {
+                let rect = Rect::from_origin_size((0.0, 0.0), ctx.size());
+
+                ctx.fill(rect, &data.color);
+            }))
+            .rounded(5.0)
+    }))
+    .expand_height()
+    .fix_width(40.0)
+    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+    .rounded(5.0)
+    .lens(AppState::audio_blocks)
+}
+
+fn create_top_bar() -> impl Widget<AppState> {
+    Flex::row()
+        .with_child(ViewSwitcher::new(
+            |data: &AppState, _| data.playing,
+            |selector, _, _| match selector {
+                true => Box::new(Button::new("Stop").on_click(
+                    |_ctx, data: &mut AppState, _env| {
+                        data.playing = false;
+                        data.audio_engine_handle.set_playing(data.playing);
+                    },
+                )),
+                false => Box::new(Flex::row().with_child(Button::new("Play").on_click(
+                    |_ctx, data: &mut AppState, _env| {
+                        data.playing = true;
+                        data.audio_engine_handle.set_playing(data.playing);
+                    },
+                ))),
+            },
+        ))
+        .align_left()
 }
 
 fn create_menu() -> impl druid::Widget<AppState> {
-    Flex::column().with_child(
-        List::new(|| TrackWidget::new(50.0))
-            .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-            .rounded(10.0)
-            .lens(Arrangement::tracks)
-            .lens(AppState::arrangement),
+    Flex::column().with_child(create_top_bar()).with_flex_child(
+        Flex::row().with_child(create_block_list()).with_flex_child(
+            Flex::column()
+                .with_child(ViewSwitcher::new(
+                    |data: &AppState, _| data.selected_audio_block,
+                    |selector, _, _| match selector {
+                        Some(selected) => create_block_menu(selected),
+                        None => Box::new(Label::new("No block selected")),
+                    },
+                ))
+                .with_flex_child(
+                    ArrangementWidget::new()
+                        .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+                        .rounded(5.0)
+                        .lens(AppState::arrangement),
+                    1.0,
+                ),
+            1.0,
+        ),
+        1.0,
     )
 }
 
@@ -40,27 +184,39 @@ fn make_menu<T: Data>() -> MenuDesc<T> {
     MenuDesc::empty()
         .append(druid::platform_menus::win::file::default())
         .append(
-            MenuDesc::new(LocalizedString::new("Track"))
-                .append(MenuItem::new(LocalizedString::new("Add Track"), ADD_TRACK))
-                .append(MenuItem::new(
-                    LocalizedString::new("Remove Track"),
-                    REMOVE_TRACK,
-                )),
+            MenuDesc::new(LocalizedString::new("Track")).append(MenuItem::new(
+                LocalizedString::new("Add Track"),
+                commands::ARRANGEMENT_ADD_TRACK,
+            )),
         )
 }
 
 fn main() {
     simple_logger::init().unwrap();
 
+    let window_desc = druid::WindowDesc::new(create_menu)
+        .menu(make_menu())
+        .title("musix");
+
+    let launcher = druid::AppLauncher::with_window(window_desc)
+        .configure_env(|env, _| {
+            theme::default(env);
+            settings::default(env);
+        })
+        .delegate(deligate::Deligate::default());
+
+    let (audio_engine, audio_engine_handle) =
+        audio::AudioEngine::new(launcher.get_external_handle());
+    audio_engine.run();
+
     let app_data = AppState {
         arrangement: arrangement::Arrangement::new(),
+        audio_blocks: Arc::new(Vec::new()),
+        selected_audio_block: None,
+        next_audio_block_id: AudioBlockID(0),
+        playing: false,
+        audio_engine_handle,
     };
 
-    let window_desc = druid::WindowDesc::new(create_menu).menu(make_menu());
-
-    druid::AppLauncher::with_window(window_desc)
-        .configure_env(|env, _| theme::default(env))
-        .delegate(deligate::Deligate::default())
-        .launch(app_data)
-        .expect("launch failed");
+    launcher.launch(app_data).expect("launch failed");
 }

@@ -923,6 +923,7 @@ dependencies = [
  "cpal",
  "druid",
  "log",
+ "ringbuf",
  "serde",
  "simple_logger",
 ]
@@ -1323,6 +1324,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "ringbuf"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "605dc50025dcaaeb8ce2b6b3583432b446c80c90ecd8463569dba8a040e87886"
 
 [[package]]
 name = "rustc-hash"

@@ -12,3 +12,4 @@ log = "*"
 simple_logger = "*"
 serde = { version = "*", features = ["derive"] }
 cpal = "*"
+ringbuf = "0.2.2"
