@@ -1,10 +1,10 @@
 use druid::{widget::*, *};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 mod arrangement;
 mod audio;
 mod deligate;
+mod widgets;
 
 use arrangement::*;
 
@@ -14,11 +14,11 @@ mod commands {
     pub const AUDIO_ENGINE_SET_PLAY_TIME: Selector<f64> =
         Selector::new("audio-engine.set-play-time");
 
-    pub const SELECT_AUDIO_BLOCK: Selector<usize> = Selector::new("select-audio-block");
+    pub const SELECT_AUDIO_BLOCK: Selector<super::AudioBlockID> =
+        Selector::new("select-audio-block");
 
     pub const ARRANGEMENT_ADD_TRACK: Selector<()> = Selector::new("arrangement.add-track");
     pub const ARRANGEMENT_REMOVE_TRACK: Selector<usize> = Selector::new("arrangement.remove-track");
-
     pub const ARRANGEMENT_UPDATE_PLAY_LINE: Selector<f64> =
         Selector::new("arrangement.update-play-line");
     //pub const ARRANGEMENT_ADD_BLOCK: Selector<>
@@ -60,15 +60,28 @@ mod theme {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, druid::Data)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, Data)]
 pub struct AudioBlockID(pub usize);
 
-#[derive(Clone, druid::Data)]
+#[derive(Clone, Data, Lens)]
 pub struct AudioBlock {
     audio_id: audio::AudioID,
-    name: String,
+    audio_block_id: AudioBlockID,
+    pub name: String,
     len_beats: usize,
     color: Color,
+}
+
+impl AudioBlock {
+    pub fn new(audio_id: audio::AudioID, audio_block_id: AudioBlockID) -> Self {
+        Self {
+            audio_id,
+            audio_block_id,
+            name: "New Block".into(),
+            len_beats: 0,
+            color: Color::rgb(0.7, 0.2, 0.2),
+        }
+    }
 }
 
 #[derive(Clone, Data, Lens)]
@@ -78,7 +91,36 @@ pub struct AppState {
     pub selected_audio_block: Option<usize>,
     pub next_audio_block_id: AudioBlockID,
     pub playing: bool,
+    pub recording: bool,
     pub audio_engine_handle: audio::AudioEngineHandle,
+}
+
+fn create_block_list() -> impl Widget<AppState> {
+    Scroll::new(List::new(|| {
+        Flex::column()
+            .with_spacer(4.0)
+            .with_child(
+                Label::dynamic(|data: &AudioBlock, _| data.name.clone()).with_text_size(16.0),
+            )
+            .fix_size(120.0, 80.0)
+            .background(Painter::new(|ctx, data: &AudioBlock, _| {
+                let rect = Rect::from_origin_size((0.0, 0.0), ctx.size());
+
+                ctx.fill(rect, &data.color);
+            }))
+            .rounded(5.0)
+            .on_click(|ctx, data: &mut AudioBlock, _env| {
+                ctx.submit_command(
+                    Command::new(commands::SELECT_AUDIO_BLOCK, data.audio_block_id),
+                    Target::Global,
+                );
+            })
+    }))
+    .expand_height()
+    .fix_width(120.0)
+    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+    .rounded(5.0)
+    .lens(AppState::audio_blocks)
 }
 
 fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
@@ -88,13 +130,17 @@ fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
 
     for i in 0..NUM_COLORS {
         let color = Color::hlc(i as f64 / NUM_COLORS as f64 * 360.0, 70.0, 127.0);
+        let cloned_color = color.clone();
 
         block_color_pick.add_child(
             Painter::new(move |ctx, _, _| {
                 let rect = Rect::from_origin_size((0.0, 0.0), ctx.size()).to_rounded_rect(5.0);
                 ctx.fill(rect, &color);
             })
-            .fix_size(30.0, 10.0),
+            .fix_size(30.0, 20.0)
+            .on_click(move |_ctx, data: &mut AudioBlock, _env| {
+                data.color = cloned_color.clone();
+            }),
         );
         block_color_pick.add_spacer(2.0);
     }
@@ -107,31 +153,16 @@ fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
                     .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
                     .rounded(5.0),
             )
+            .with_flex_child(
+                Flex::column().with_child(TextBox::new().lens(AudioBlock::name)),
+                1.0,
+            )
             .align_left()
             .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
             .rounded(5.0)
             .lens(lens::Id.index(*selected).in_arc())
             .lens(AppState::audio_blocks),
     )
-}
-
-fn create_block_list() -> impl Widget<AppState> {
-    Scroll::new(List::new(|| {
-        Flex::column()
-            .with_child(Label::dynamic(|data: &AudioBlock, _| data.name.clone()))
-            .fix_size(40.0, 40.0)
-            .background(Painter::new(|ctx, data: &AudioBlock, _| {
-                let rect = Rect::from_origin_size((0.0, 0.0), ctx.size());
-
-                ctx.fill(rect, &data.color);
-            }))
-            .rounded(5.0)
-    }))
-    .expand_height()
-    .fix_width(40.0)
-    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-    .rounded(5.0)
-    .lens(AppState::audio_blocks)
 }
 
 fn create_top_bar() -> impl Widget<AppState> {
@@ -142,15 +173,32 @@ fn create_top_bar() -> impl Widget<AppState> {
                 true => Box::new(Button::new("Stop").on_click(
                     |_ctx, data: &mut AppState, _env| {
                         data.playing = false;
-                        data.audio_engine_handle.set_playing(data.playing);
+                        data.audio_engine_handle.set_playing(false);
+
+                        if let Some(id) = data.audio_engine_handle.stop_recording() {
+                            Arc::make_mut(&mut data.audio_blocks)
+                                .push(AudioBlock::new(id, data.next_audio_block_id));
+                            data.next_audio_block_id.0 += 1;
+                        }
                     },
                 )),
-                false => Box::new(Flex::row().with_child(Button::new("Play").on_click(
-                    |_ctx, data: &mut AppState, _env| {
-                        data.playing = true;
-                        data.audio_engine_handle.set_playing(data.playing);
-                    },
-                ))),
+                false => Box::new(
+                    Flex::row()
+                        .with_child(Button::new("Play").on_click(
+                            |_ctx, data: &mut AppState, _env| {
+                                data.playing = true;
+                                data.audio_engine_handle.set_playing(true);
+                            },
+                        ))
+                        .with_child(Button::new("Record").on_click(
+                            |_ctx, data: &mut AppState, _env| {
+                                data.recording = true;
+                                data.playing = true;
+                                data.audio_engine_handle.set_playing(true);
+                                data.audio_engine_handle.start_recording();
+                            },
+                        )),
+                ),
             },
         ))
         .align_left()
@@ -160,13 +208,16 @@ fn create_menu() -> impl druid::Widget<AppState> {
     Flex::column().with_child(create_top_bar()).with_flex_child(
         Flex::row().with_child(create_block_list()).with_flex_child(
             Flex::column()
-                .with_child(ViewSwitcher::new(
-                    |data: &AppState, _| data.selected_audio_block,
-                    |selector, _, _| match selector {
-                        Some(selected) => create_block_menu(selected),
-                        None => Box::new(Label::new("No block selected")),
-                    },
-                ))
+                .with_flex_child(
+                    ViewSwitcher::new(
+                        |data: &AppState, _| data.selected_audio_block,
+                        |selector, _, _| match selector {
+                            Some(selected) => create_block_menu(selected),
+                            None => Box::new(Label::new("No block selected")),
+                        },
+                    ),
+                    1.2,
+                )
                 .with_flex_child(
                     ArrangementWidget::new()
                         .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
@@ -215,6 +266,7 @@ fn main() {
         selected_audio_block: None,
         next_audio_block_id: AudioBlockID(0),
         playing: false,
+        recording: false,
         audio_engine_handle,
     };
 
