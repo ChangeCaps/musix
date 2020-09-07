@@ -1,5 +1,5 @@
 use druid::{widget::*, *};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 mod arrangement;
 mod audio;
@@ -29,10 +29,12 @@ mod settings {
 
     pub const ARRANGEMENT_SCROLL_SPEED: Key<f64> = Key::new("arrangement.scroll-speed");
     pub const ARRANGEMENT_BEAT_SIZE: Key<f64> = Key::new("arrangement.beat-size");
+    pub const ARRANGEMENT_TRACK_HEIGHT: Key<f64> = Key::new("arrangement.track-height");
 
     pub fn default(env: &mut druid::Env) {
         env.set(ARRANGEMENT_SCROLL_SPEED, 0.1);
-        env.set(ARRANGEMENT_BEAT_SIZE, 10.0);
+        env.set(ARRANGEMENT_BEAT_SIZE, 40.0);
+        env.set(ARRANGEMENT_TRACK_HEIGHT, 20.0);
     }
 }
 
@@ -54,9 +56,14 @@ mod theme {
 
         env.set(ARRANGEMENT_BEAT_LINE_WIDTH, 1.0);
         env.set(ARRANGEMENT_BEAT_LINE_COLOR, Color::rgb(0.2, 0.2, 0.2));
-        env.set(ARRANGEMENT_TACT_LINE_COLOR, Color::rgb(0.3, 0.3, 0.3));
+        env.set(ARRANGEMENT_TACT_LINE_COLOR, Color::rgb(0.4, 0.4, 0.4));
         env.set(ARRANGEMENT_PLAY_LINE_WIDTH, 3.5);
         env.set(ARRANGEMENT_PLAY_LINE_COLOR, Color::rgb(0.5, 0.5, 0.5));
+
+        env.set(
+            druid::theme::WINDOW_BACKGROUND_COLOR,
+            Color::rgb(0.05, 0.05, 0.06),
+        );
     }
 }
 
@@ -66,17 +73,15 @@ pub struct AudioBlockID(pub usize);
 #[derive(Clone, Data, Lens)]
 pub struct AudioBlock {
     audio_id: audio::AudioID,
-    audio_block_id: AudioBlockID,
     pub name: String,
     len_beats: usize,
     color: Color,
 }
 
 impl AudioBlock {
-    pub fn new(audio_id: audio::AudioID, audio_block_id: AudioBlockID) -> Self {
+    pub fn new(audio_id: audio::AudioID) -> Self {
         Self {
             audio_id,
-            audio_block_id,
             name: "New Block".into(),
             len_beats: 0,
             color: Color::rgb(0.7, 0.2, 0.2),
@@ -87,8 +92,10 @@ impl AudioBlock {
 #[derive(Clone, Data, Lens)]
 pub struct AppState {
     pub arrangement: arrangement::Arrangement,
-    pub audio_blocks: Arc<Vec<AudioBlock>>,
-    pub selected_audio_block: Option<usize>,
+    pub audio_blocks: Arc<HashMap<AudioBlockID, AudioBlock>>,
+    pub shown_audio_blocks: Arc<Vec<AudioBlockID>>,
+    pub listed_audio_blocks: Arc<Vec<AudioBlockID>>,
+    pub selected_audio_block: Option<AudioBlockID>,
     pub next_audio_block_id: AudioBlockID,
     pub playing: bool,
     pub recording: bool,
@@ -100,30 +107,42 @@ fn create_block_list() -> impl Widget<AppState> {
         Flex::column()
             .with_spacer(4.0)
             .with_child(
-                Label::dynamic(|data: &AudioBlock, _| data.name.clone()).with_text_size(16.0),
+                Label::dynamic(
+                    |data: &(Arc<HashMap<AudioBlockID, AudioBlock>>, AudioBlockID), _| {
+                        data.0[&data.1].name.clone()
+                    },
+                )
+                .with_text_size(16.0),
             )
             .fix_size(120.0, 80.0)
-            .background(Painter::new(|ctx, data: &AudioBlock, _| {
-                let rect = Rect::from_origin_size((0.0, 0.0), ctx.size());
+            .background(Painter::new(
+                |ctx, data: &(Arc<HashMap<AudioBlockID, AudioBlock>>, AudioBlockID), _| {
+                    let rect = Rect::from_origin_size((0.0, 0.0), ctx.size());
 
-                ctx.fill(rect, &data.color);
-            }))
+                    ctx.fill(rect, &data.0[&data.1].color);
+                },
+            ))
             .rounded(5.0)
-            .on_click(|ctx, data: &mut AudioBlock, _env| {
-                ctx.submit_command(
-                    Command::new(commands::SELECT_AUDIO_BLOCK, data.audio_block_id),
-                    Target::Global,
-                );
-            })
+            .on_click(
+                |ctx, data: &mut (Arc<HashMap<AudioBlockID, AudioBlock>>, AudioBlockID), _env| {
+                    ctx.submit_command(
+                        Command::new(commands::SELECT_AUDIO_BLOCK, data.1),
+                        Target::Global,
+                    );
+                },
+            )
     }))
     .expand_height()
     .fix_width(120.0)
     .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
     .rounded(5.0)
-    .lens(AppState::audio_blocks)
+    .lens(lens::Id.map(
+        |data: &AppState| (data.audio_blocks.clone(), data.shown_audio_blocks.clone()),
+        |data, val| data.audio_blocks = val.0,
+    ))
 }
 
-fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
+fn create_block_menu(selected: AudioBlockID) -> Box<impl Widget<AppState>> {
     const NUM_COLORS: u32 = 20;
 
     let mut block_color_pick = Flex::column();
@@ -153,15 +172,13 @@ fn create_block_menu(selected: &usize) -> Box<impl Widget<AppState>> {
                     .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
                     .rounded(5.0),
             )
-            .with_flex_child(
-                Flex::column().with_child(TextBox::new().lens(AudioBlock::name)),
-                1.0,
-            )
             .align_left()
-            .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-            .rounded(5.0)
-            .lens(lens::Id.index(*selected).in_arc())
-            .lens(AppState::audio_blocks),
+            .lens(AppState::audio_blocks.map(
+                move |data: &Arc<HashMap<AudioBlockID, AudioBlock>>| data[&selected].clone(),
+                move |data, val| {
+                    Arc::make_mut(data).insert(selected, val);
+                },
+            )),
     )
 }
 
@@ -177,7 +194,9 @@ fn create_top_bar() -> impl Widget<AppState> {
 
                         if let Some(id) = data.audio_engine_handle.stop_recording() {
                             Arc::make_mut(&mut data.audio_blocks)
-                                .push(AudioBlock::new(id, data.next_audio_block_id));
+                                .insert(data.next_audio_block_id, AudioBlock::new(id));
+                            Arc::make_mut(&mut data.shown_audio_blocks)
+                                .push(data.next_audio_block_id);
                             data.next_audio_block_id.0 += 1;
                         }
                     },
@@ -212,17 +231,18 @@ fn create_menu() -> impl druid::Widget<AppState> {
                     ViewSwitcher::new(
                         |data: &AppState, _| data.selected_audio_block,
                         |selector, _, _| match selector {
-                            Some(selected) => create_block_menu(selected),
-                            None => Box::new(Label::new("No block selected")),
+                            Some(selected) => create_block_menu(*selected),
+                            None => Box::new(Flex::row().align_left()),
                         },
-                    ),
+                    )
+                    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+                    .rounded(5.0),
                     1.2,
                 )
                 .with_flex_child(
                     ArrangementWidget::new()
                         .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-                        .rounded(5.0)
-                        .lens(AppState::arrangement),
+                        .rounded(5.0),
                     1.0,
                 ),
             1.0,
@@ -247,7 +267,7 @@ fn main() {
 
     let window_desc = druid::WindowDesc::new(create_menu)
         .menu(make_menu())
-        .title("musix");
+        .title("Musix");
 
     let launcher = druid::AppLauncher::with_window(window_desc)
         .configure_env(|env, _| {
@@ -262,7 +282,9 @@ fn main() {
 
     let app_data = AppState {
         arrangement: arrangement::Arrangement::new(),
-        audio_blocks: Arc::new(Vec::new()),
+        audio_blocks: Arc::new(HashMap::new()),
+        shown_audio_blocks: Arc::new(Vec::new()),
+        listed_audio_blocks: Arc::new(Vec::new()),
         selected_audio_block: None,
         next_audio_block_id: AudioBlockID(0),
         playing: false,

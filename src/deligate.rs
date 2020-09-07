@@ -47,14 +47,7 @@ impl druid::AppDelegate<crate::AppState> for Deligate {
             _ if cmd.is(commands::SELECT_AUDIO_BLOCK) => {
                 let id = cmd.get_unchecked(commands::SELECT_AUDIO_BLOCK);
 
-                let index = data
-                    .audio_blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, audio_block)| audio_block.audio_block_id == *id)
-                    .map(|(i, _)| i);
-
-                data.selected_audio_block = index;
+                data.selected_audio_block = Some(*id);
 
                 false
             }
