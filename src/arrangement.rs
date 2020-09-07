@@ -46,24 +46,85 @@ impl Track {
         }
     }
 
-    pub fn get_block(&self, index: usize) -> Option<&Block> {
+    pub fn get_index(&self, beat: usize) -> Option<usize> {
         let mut place = 0;
 
-        for (space, block) in self.blocks.iter() {
+        for (i, (space, block)) in self.blocks.iter().enumerate() {
             place += space;
 
-            if index < place {
+            if beat < place {
                 return None;
             }
 
             place += block.length;
 
-            if index < place {
-                return Some(block);
+            if beat < place {
+                return Some(i);
             }
         }
 
         None
+    }
+
+    pub fn get_block(&self, beat: usize) -> Option<&Block> {
+        self.get_index(beat).map(|i| &self.blocks[i].1)
+    }
+
+    pub fn get_selection(&self, beat: usize) -> Option<Selection> {
+        if let Some(i) = self.get_index(beat) {
+            if beat == self.get_start(i) {
+                log::info!("selected start of: {}", i);
+                Some(Selection::Start(i))
+            } else if beat == self.get_end(i) {
+                log::info!("selected end of: {}", i);
+                Some(Selection::End(i))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn get_start(&self, index: usize) -> usize {
+        let mut start = 0;
+        
+        for i in 0..index {
+            start += self.blocks[i].0;
+            start += self.blocks[i].1.length;
+        }
+
+        start + self.blocks[index].0
+    }
+
+    pub fn get_end(&self, index: usize) -> usize {
+        let mut end = 0;
+        
+        for i in 0..index + 1 {
+            end += self.blocks[i].0;
+            end += self.blocks[i].1.length;
+        }
+
+        end
+    }
+
+    pub fn move_start(&mut self, index: usize, target: usize) -> Result<(), ()> {
+        let end = if index > 0 {
+            self.get_end(index - 1)
+        } else {
+            0
+        };
+        
+        if target < end {
+            Err(())
+        } else {
+            let blocks = Arc::make_mut(&mut self.blocks);
+            let old_offset = blocks[index].0;
+            blocks[index].0 = target - end;
+            blocks[index].1.length += old_offset - blocks[index].0;
+
+            Ok(())
+        }
     }
 }
 
@@ -260,19 +321,34 @@ impl Widget<AppState> for ArrangementWidget {
     }
 }
 
+pub enum Selection {
+    Start(usize),
+    End(usize),
+}
+
 pub struct TrackWidget {
     index: usize,
+    selection: Option<Selection>,
 }
 
 impl TrackWidget {
     pub fn new(index: usize) -> Self {
-        Self { index }
+        Self { index, selection: None }
     }
 }
 
 impl Widget<AppState> for TrackWidget {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut AppState, _env: &Env) {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut AppState, env: &Env) {
+        let track = &mut Arc::make_mut(&mut data.arrangement.tracks)[self.index];
+
         match event {
+            Event::MouseDown(mouse_event) if mouse_event.button.is_left() => {
+                let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
+                let beat = ((mouse_event.pos.x - beat_size / 2.0) / beat_size).round() as usize;
+
+                self.selection = track.get_selection(beat);
+            }
+
             Event::MouseDown(mouse_event) if mouse_event.button.is_right() => {
                 let menu = ContextMenu::new(
                     MenuDesc::<AppState>::empty().append(MenuItem::new(
@@ -282,6 +358,23 @@ impl Widget<AppState> for TrackWidget {
                     mouse_event.window_pos,
                 );
                 ctx.show_context_menu(menu);
+            }
+
+            Event::MouseMove(mouse_event) => {
+                let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
+                let beat = ((mouse_event.pos.x - beat_size / 2.0) / beat_size).round() as usize;
+
+                if let Some(selection) = &self.selection {
+                    match selection {
+                        Selection::Start(i) => {
+                            log::info!("{:?}", track.move_start(*i, beat));
+                        },
+
+                        Selection::End(i) => {
+
+                        }
+                    }
+                }
             }
 
             _ => (),
