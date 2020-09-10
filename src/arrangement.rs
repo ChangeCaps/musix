@@ -25,24 +25,21 @@ impl Arrangement {
     }
 }
 
-#[derive(Clone, Data)]
+#[derive(Clone)]
 pub struct Track {
-    blocks: Arc<Vec<(usize, Block)>>,
+    blocks: Vec<(usize, Block)>,
 }
 
 impl Track {
     pub fn new() -> Self {
         Self {
-            blocks: Arc::new(vec![
-                (0, Block::new(4, crate::audio::AudioID(0))),
-                (0, Block::new(6, crate::audio::AudioID(0))),
-            ]),
+            blocks: Vec::new(),
         }
     }
 
     pub fn empty() -> Self {
         Self {
-            blocks: Arc::new(Vec::new()),
+            blocks: Vec::new(),
         }
     }
 
@@ -90,7 +87,8 @@ impl Track {
                 None
             }
         } else {
-            None
+            log::info!("selected new: {}", beat);
+            Some(Selection::New(beat))
         }
     }
 
@@ -116,13 +114,45 @@ impl Track {
         end
     }
 
+    /// Adds a block or atleast it tries
+    pub fn add_block(&mut self, audio_id: crate::audio::AudioID, a: usize, b: usize) -> Result<(), ()> {
+        let start = a.min(b);
+        let end = a.max(b);
+
+        let block = Block::new(end-start, audio_id);
+
+        for i in 0..self.blocks.len() {
+            let b_end = self.get_end(i);
+            
+            if start > b_end && self.blocks.get(i+1).map(|_| end < self.get_start(i + 1)).unwrap_or(true) {
+                self.blocks.insert(i + 1, (start - b_end, block));
+
+                if i + 2 < self.blocks.len() {
+                    self.blocks[i + 2].0 -= start - b_end + (end - start);
+                }
+
+                return Ok(())
+            }
+        }
+
+        if self.blocks.len() > 0 {
+
+        } else {
+            self.blocks.push((start, block));
+            return Ok(());
+        }
+
+        Err(())
+    }
+
+    /// Moves the start of a block
     pub fn move_start(&mut self, idx: usize, target: usize) -> Result<(), ()> {
         let end = if idx > 0 { self.get_end(idx - 1) } else { 0 };
 
         if target < end || target >= self.get_end(idx) {
             Err(())
         } else {
-            let blocks = Arc::make_mut(&mut self.blocks);
+            let blocks = &mut self.blocks;
             let old_offset = blocks[idx].0;
             blocks[idx].0 = target - end;
             blocks[idx].1.length += old_offset - blocks[idx].0;
@@ -143,7 +173,7 @@ impl Track {
         {
             Err(())
         } else {
-            let blocks = Arc::make_mut(&mut self.blocks);
+            let blocks = &mut self.blocks;
             let old_length = blocks[idx].1.length;
             blocks[idx].1.length = target - start;
 
@@ -360,6 +390,7 @@ impl Widget<AppState> for ArrangementWidget {
 pub enum Selection {
     Start(usize),
     End(usize),
+    New(usize),
 }
 
 pub struct TrackWidget {
@@ -412,14 +443,25 @@ impl Widget<AppState> for TrackWidget {
 
                     match selection {
                         Selection::Start(i) => {
-                            let _ = track.move_start(*i, beat);
-                            ctx.request_paint();
+                            if track.move_start(*i, beat).is_ok() {
+                                ctx.request_paint();
+                            }
                         }
 
                         Selection::End(i) => {
-                            let _ = track.move_end(*i, beat);
-                            ctx.request_paint();
+                            if track.move_end(*i, beat).is_ok() {
+                                ctx.request_paint();
+                            }
                         }
+
+                        Selection::New(i) if beat != *i && data.selected_audio_block.is_some() => {
+                            if track.add_block(data.audio_blocks[&data.selected_audio_block.unwrap()].audio_id, *i, beat).is_ok() {
+                                ctx.request_paint();
+                                log::info!("added, {}, {}", *i, beat);
+                            }
+                        }
+
+                        _ => (),
                     }
                 }
             }

@@ -73,7 +73,6 @@ pub struct AudioBlockID(pub usize);
 #[derive(Clone, Data, Lens)]
 pub struct AudioBlock {
     audio_id: audio::AudioID,
-    pub name: String,
     len_beats: usize,
     color: Color,
 }
@@ -82,7 +81,6 @@ impl AudioBlock {
     pub fn new(audio_id: audio::AudioID) -> Self {
         Self {
             audio_id,
-            name: "New Block".into(),
             len_beats: 0,
             color: Color::rgb(0.7, 0.2, 0.2),
         }
@@ -99,21 +97,13 @@ pub struct AppState {
     pub next_audio_block_id: AudioBlockID,
     pub playing: bool,
     pub recording: bool,
+    pub feedback: bool,
     pub audio_engine_handle: audio::AudioEngineHandle,
 }
 
 fn create_block_list() -> impl Widget<AppState> {
     Scroll::new(List::new(|| {
         Flex::column()
-            .with_spacer(4.0)
-            .with_child(
-                Label::dynamic(
-                    |data: &(Arc<HashMap<AudioBlockID, AudioBlock>>, AudioBlockID), _| {
-                        data.0[&data.1].name.clone()
-                    },
-                )
-                .with_text_size(16.0),
-            )
             .fix_size(120.0, 80.0)
             .background(Painter::new(
                 |ctx, data: &(Arc<HashMap<AudioBlockID, AudioBlock>>, AudioBlockID), _| {
@@ -220,6 +210,14 @@ fn create_top_bar() -> impl Widget<AppState> {
                 ),
             },
         ))
+        .with_spacer(5.0)
+        .with_child(Checkbox::new("Feedback").lens(lens::Id.map(
+            |data: &AppState| data.feedback,
+            |data, val| {
+                data.feedback = val;
+                data.audio_engine_handle.set_feedback(data.feedback);
+            },
+        )))
         .align_left()
 }
 
@@ -289,6 +287,7 @@ fn main() {
         next_audio_block_id: AudioBlockID(0),
         playing: false,
         recording: false,
+        feedback: true,
         audio_engine_handle,
     };
 

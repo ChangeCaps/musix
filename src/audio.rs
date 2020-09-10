@@ -14,6 +14,7 @@ pub enum Command {
     SetPlaying(bool),
     SetRecording(bool),
     SetPlayTime(f64),
+    SetFeedback(bool),
 }
 
 pub enum CommandResponse {
@@ -45,6 +46,10 @@ impl AudioEngineHandle {
         match self.receiver.recv().unwrap() {
             CommandResponse::SetRecording(v) => v,
         }
+    }
+
+    pub fn set_feedback(&self, val: bool) {
+        self.sender.send(Command::SetFeedback(val)).unwrap();
     }
 }
 
@@ -100,6 +105,7 @@ pub struct AudioEngine {
     sender: Sender<CommandResponse>,
     event_sink: druid::ExtEventSink,
     volume: f64,
+    feedback: bool,
     sources: HashMap<AudioID, Box<dyn AudioSource + Send + Sync>>,
     next_audio_id: AudioID,
 }
@@ -113,6 +119,7 @@ impl AudioEngine {
             Self {
                 event_sink,
                 volume: 0.5,
+                feedback: true,
                 receiver: e_receiver,
                 sender: e_sender,
                 sources: HashMap::new(),
@@ -149,7 +156,7 @@ impl AudioEngine {
 
             let config: cpal::StreamConfig = input_device.default_input_config()?.into();
 
-            const LATENCY_MS: f32 = 100.0;
+            const LATENCY_MS: f32 = 20.0;
 
             let sample_rate = config.sample_rate.0;
             let channels = config.channels as u32;
@@ -218,11 +225,18 @@ impl AudioEngine {
                                     play_sample =
                                         (time * sample_rate as f64 * channels as f64) as u32;
                                 }
+                                Command::SetFeedback(feedback) => self.feedback = feedback,
                             }
                         }
 
                         match consumer.pop() {
-                            Some(s) => *sample = s * volume as f32,
+                            Some(s) => {
+                                if self.feedback {
+                                    *sample = s * volume as f32;
+                                } else {
+                                    *sample = 0.0;
+                                }
+                            }
                             None => (), //error!("input stream fell behind, increase latency"),
                         }
 
