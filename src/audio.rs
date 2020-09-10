@@ -149,7 +149,7 @@ impl AudioEngine {
 
             let config: cpal::StreamConfig = input_device.default_input_config()?.into();
 
-            const LATENCY_MS: f32 = 20.0;
+            const LATENCY_MS: f32 = 100.0;
 
             let sample_rate = config.sample_rate.0;
             let channels = config.channels as u32;
@@ -175,7 +175,7 @@ impl AudioEngine {
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     for sample in data {
                         if let Err(e) = producer.push(*sample) {
-                            error!("output stream fell behind '{}', increase latency", e);
+                            //error!("output stream fell behind '{}', increase latency", e);
                         }
                     }
                 },
@@ -202,8 +202,6 @@ impl AudioEngine {
                                             let id = self.next_audio_id;
                                             self.next_audio_id.0 += 1;
 
-                                            println!("{:?}", recording_clip.samples);
-
                                             self.sources.insert(id, Box::new(recording_clip));
 
                                             self.sender
@@ -225,7 +223,7 @@ impl AudioEngine {
 
                         match consumer.pop() {
                             Some(s) => *sample = s * volume as f32,
-                            None => error!("input stream fell behind, increase latency"),
+                            None => (), //error!("input stream fell behind, increase latency"),
                         }
 
                         channel += 1;

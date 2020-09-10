@@ -20,8 +20,8 @@ impl Arrangement {
         Arc::make_mut(&mut self.tracks).push(Track::empty())
     }
 
-    pub fn remove_track(&mut self, index: usize) {
-        Arc::make_mut(&mut self.tracks).remove(index);
+    pub fn remove_track(&mut self, idx: usize) {
+        Arc::make_mut(&mut self.tracks).remove(idx);
     }
 }
 
@@ -46,7 +46,7 @@ impl Track {
         }
     }
 
-    pub fn get_index(&self, beat: usize) -> Option<usize> {
+    pub fn get_idx(&self, beat: usize) -> Option<usize> {
         let mut place = 0;
 
         for (i, (space, block)) in self.blocks.iter().enumerate() {
@@ -67,15 +67,23 @@ impl Track {
     }
 
     pub fn get_block(&self, beat: usize) -> Option<&Block> {
-        self.get_index(beat).map(|i| &self.blocks[i].1)
+        self.get_idx(beat).map(|i| &self.blocks[i].1)
     }
 
     pub fn get_selection(&self, beat: usize) -> Option<Selection> {
-        if let Some(i) = self.get_index(beat) {
+        // FIXME: this is bad, very bad, please find a better way to do this. please.
+        //      -Hjalte Nannestad 10-09-2020
+
+        if let Some(i) = self.get_idx(beat) {
+            log::info!("idx: {}", i);
             if beat == self.get_start(i) {
                 log::info!("selected start of: {}", i);
                 Some(Selection::Start(i))
-            } else if beat == self.get_end(i) {
+            } else {
+                None
+            }
+        } else if let Some(i) = self.get_idx(beat - 1) {
+            if beat == self.get_end(i) {
                 log::info!("selected end of: {}", i);
                 Some(Selection::End(i))
             } else {
@@ -86,21 +94,21 @@ impl Track {
         }
     }
 
-    pub fn get_start(&self, index: usize) -> usize {
+    pub fn get_start(&self, idx: usize) -> usize {
         let mut start = 0;
-        
-        for i in 0..index {
+
+        for i in 0..idx {
             start += self.blocks[i].0;
             start += self.blocks[i].1.length;
         }
 
-        start + self.blocks[index].0
+        start + self.blocks[idx].0
     }
 
-    pub fn get_end(&self, index: usize) -> usize {
+    pub fn get_end(&self, idx: usize) -> usize {
         let mut end = 0;
-        
-        for i in 0..index + 1 {
+
+        for i in 0..idx + 1 {
             end += self.blocks[i].0;
             end += self.blocks[i].1.length;
         }
@@ -108,20 +116,40 @@ impl Track {
         end
     }
 
-    pub fn move_start(&mut self, index: usize, target: usize) -> Result<(), ()> {
-        let end = if index > 0 {
-            self.get_end(index - 1)
-        } else {
-            0
-        };
-        
-        if target < end {
+    pub fn move_start(&mut self, idx: usize, target: usize) -> Result<(), ()> {
+        let end = if idx > 0 { self.get_end(idx - 1) } else { 0 };
+
+        if target < end || target >= self.get_end(idx) {
             Err(())
         } else {
             let blocks = Arc::make_mut(&mut self.blocks);
-            let old_offset = blocks[index].0;
-            blocks[index].0 = target - end;
-            blocks[index].1.length += old_offset - blocks[index].0;
+            let old_offset = blocks[idx].0;
+            blocks[idx].0 = target - end;
+            blocks[idx].1.length += old_offset - blocks[idx].0;
+
+            Ok(())
+        }
+    }
+
+    pub fn move_end(&mut self, idx: usize, target: usize) -> Result<(), ()> {
+        let start = self.get_start(idx);
+
+        if self
+            .blocks
+            .get(idx + 1)
+            .map(|_| target > self.get_start(idx + 1))
+            .unwrap_or(false)
+            || target <= self.get_start(idx)
+        {
+            Err(())
+        } else {
+            let blocks = Arc::make_mut(&mut self.blocks);
+            let old_length = blocks[idx].1.length;
+            blocks[idx].1.length = target - start;
+
+            if blocks.len() > idx + 1 {
+                blocks[idx + 1].0 += old_length - blocks[idx].1.length;
+            }
 
             Ok(())
         }
@@ -155,14 +183,20 @@ impl ArrangementWidget {
         }
     }
 
-    pub fn update_children(&mut self, arrangement: &Arrangement) {
-        let mut new_children = Vec::new();
+    pub fn update_children(&mut self, arrangement: &Arrangement) -> bool {
+        let changed = self.children.len() != arrangement.tracks.len();
+
+        self.children.truncate(arrangement.tracks.len());
 
         for (i, _track) in arrangement.tracks.iter().enumerate() {
-            new_children.push(WidgetPod::new(TrackWidget::new(i)));
+            if i >= self.children.len() {
+                self.children.push(WidgetPod::new(TrackWidget::new(i)));
+            } else {
+                self.children[i].widget_mut().idx = i;
+            }
         }
 
-        self.children = new_children;
+        changed
     }
 }
 
@@ -174,7 +208,7 @@ impl Widget<AppState> for ArrangementWidget {
 
         match event {
             Event::Wheel(mouse_event) => {
-                let scroll_speed = env.get(crate::settings::ARRANGEMENT_SCROLL_SPEED);
+                let scroll_speed = env.get(settings::ARRANGEMENT_SCROLL_SPEED);
 
                 if mouse_event.mods.ctrl {
                     self.scroll.y += mouse_event.wheel_delta.y * scroll_speed;
@@ -236,8 +270,9 @@ impl Widget<AppState> for ArrangementWidget {
         }
 
         if !old_data.arrangement.same(&data.arrangement) {
-            self.update_children(&data.arrangement);
-            ctx.children_changed();
+            if self.update_children(&data.arrangement) {
+                ctx.children_changed();
+            }
         }
     }
 
@@ -259,6 +294,7 @@ impl Widget<AppState> for ArrangementWidget {
                 (0.0 - self.scroll.x, size.height - self.scroll.y),
                 child_size,
             );
+
             child.set_layout_rect(ctx, data, env, rect);
 
             size.height += child_size.height;
@@ -327,33 +363,40 @@ pub enum Selection {
 }
 
 pub struct TrackWidget {
-    index: usize,
+    idx: usize,
     selection: Option<Selection>,
 }
 
 impl TrackWidget {
-    pub fn new(index: usize) -> Self {
-        Self { index, selection: None }
+    pub fn new(idx: usize) -> Self {
+        Self {
+            idx,
+            selection: None,
+        }
     }
 }
 
 impl Widget<AppState> for TrackWidget {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut AppState, env: &Env) {
-        let track = &mut Arc::make_mut(&mut data.arrangement.tracks)[self.index];
+        let track = &data.arrangement.tracks[self.idx];
 
         match event {
             Event::MouseDown(mouse_event) if mouse_event.button.is_left() => {
                 let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
-                let beat = ((mouse_event.pos.x - beat_size / 2.0) / beat_size).round() as usize;
+                let beat = (mouse_event.pos.x / beat_size).round() as usize;
 
                 self.selection = track.get_selection(beat);
+            }
+
+            Event::MouseUp(mouse_event) if mouse_event.button.is_left() => {
+                self.selection = None;
             }
 
             Event::MouseDown(mouse_event) if mouse_event.button.is_right() => {
                 let menu = ContextMenu::new(
                     MenuDesc::<AppState>::empty().append(MenuItem::new(
                         LocalizedString::new("Remove"),
-                        Command::new(commands::ARRANGEMENT_REMOVE_TRACK, self.index),
+                        Command::new(commands::ARRANGEMENT_REMOVE_TRACK, self.idx),
                     )),
                     mouse_event.window_pos,
                 );
@@ -362,16 +405,20 @@ impl Widget<AppState> for TrackWidget {
 
             Event::MouseMove(mouse_event) => {
                 let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
-                let beat = ((mouse_event.pos.x - beat_size / 2.0) / beat_size).round() as usize;
+                let beat = (mouse_event.pos.x / beat_size).round() as usize;
 
                 if let Some(selection) = &self.selection {
+                    let track = &mut Arc::make_mut(&mut data.arrangement.tracks)[self.idx];
+
                     match selection {
                         Selection::Start(i) => {
-                            log::info!("{:?}", track.move_start(*i, beat));
-                        },
+                            let _ = track.move_start(*i, beat);
+                            ctx.request_paint();
+                        }
 
                         Selection::End(i) => {
-
+                            let _ = track.move_end(*i, beat);
+                            ctx.request_paint();
                         }
                     }
                 }
@@ -407,11 +454,13 @@ impl Widget<AppState> for TrackWidget {
         let mut place = 0.0;
         let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
 
-        let track = &data.arrangement.tracks[self.index];
+        let track = &data.arrangement.tracks[self.idx];
 
         while place < ctx.size().width {
-            let block = track.get_block((place / beat_size).floor() as usize); //.map(|i| &data.audio_blocks[i.id]);
-            let prev_block = track.get_block((place / beat_size).floor() as usize - 1);
+            let block_idx = track.get_idx((place / beat_size).floor() as usize);
+            let prev_block_idx = track.get_idx((place / beat_size).floor() as usize - 1);
+            let block = block_idx.map(|i| &track.blocks[i].1);
+            let prev_block = prev_block_idx.map(|i| &track.blocks[i].1);
 
             let color = block
                 .map(|b| Color::rgb(0.7, 0.2, 0.2))
@@ -432,15 +481,18 @@ impl Widget<AppState> for TrackWidget {
             );
             ctx.fill(rect, &color);
 
+            // small circle drawn at the end of each block
             if let Some(_prev_block) = prev_block {
-                if block != prev_block {
+                if block_idx != prev_block_idx {
                     let circle = kurbo::Circle::new((place, ctx.size().height / 2.0), 4.0);
                     ctx.fill(circle, &prev_color);
                 }
             }
 
+            // large circle drawn at the start of each block
+            // TODO: fix white line overlap
             if let Some(_block) = block {
-                if block != prev_block {
+                if block_idx != prev_block_idx {
                     let circle = kurbo::Circle::new((place, ctx.size().height / 2.0), 6.0);
                     ctx.stroke(circle, &color, 1.0);
                 }

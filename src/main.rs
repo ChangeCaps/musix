@@ -62,7 +62,7 @@ mod theme {
 
         env.set(
             druid::theme::WINDOW_BACKGROUND_COLOR,
-            Color::rgb(0.05, 0.05, 0.06),
+            Color::rgb(0.1, 0.1, 0.11),
         );
     }
 }
