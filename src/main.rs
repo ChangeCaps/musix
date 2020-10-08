@@ -9,7 +9,10 @@ mod widgets;
 use arrangement::*;
 
 mod commands {
+    use druid::MouseEvent;
     use druid::Selector;
+
+    pub const GLOBAL_MOUSE_UP: Selector<MouseEvent> = Selector::new("global.mouse_up");
 
     pub const AUDIO_ENGINE_SET_PLAY_TIME: Selector<f64> =
         Selector::new("audio-engine.set-play-time");
@@ -147,8 +150,9 @@ fn create_block_menu(selected: AudioBlockID) -> Box<impl Widget<AppState>> {
                 ctx.fill(rect, &color);
             })
             .fix_size(30.0, 20.0)
-            .on_click(move |_ctx, data: &mut AudioBlock, _env| {
+            .on_click(move |ctx, data: &mut AudioBlock, _env| {
                 data.color = cloned_color.clone();
+                ctx.window().invalidate();
             }),
         );
         block_color_pick.add_spacer(2.0);
@@ -222,31 +226,52 @@ fn create_top_bar() -> impl Widget<AppState> {
 }
 
 fn create_menu() -> impl druid::Widget<AppState> {
-    Flex::column().with_child(create_top_bar()).with_flex_child(
-        Flex::row().with_child(create_block_list()).with_flex_child(
-            Flex::column()
-                .with_flex_child(
-                    ViewSwitcher::new(
-                        |data: &AppState, _| data.selected_audio_block,
-                        |selector, _, _| match selector {
-                            Some(selected) => create_block_menu(*selected),
-                            None => Box::new(Flex::row().align_left()),
-                        },
-                    )
-                    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-                    .rounded(5.0),
-                    1.2,
-                )
-                .with_flex_child(
-                    ArrangementWidget::new()
+    Flex::column()
+        .with_child(create_top_bar())
+        .with_flex_child(
+            Flex::row().with_child(create_block_list()).with_flex_child(
+                Flex::column()
+                    .with_flex_child(
+                        ViewSwitcher::new(
+                            |data: &AppState, _| data.selected_audio_block,
+                            |selector, _, _| match selector {
+                                Some(selected) => create_block_menu(*selected),
+                                None => Box::new(Flex::row().align_left()),
+                            },
+                        )
                         .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
                         .rounded(5.0),
-                    1.0,
-                ),
+                        1.2,
+                    )
+                    .with_flex_child(
+                        ArrangementWidget::new()
+                            .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+                            .rounded(5.0),
+                        1.0,
+                    ),
+                1.0,
+            ),
             1.0,
-        ),
-        1.0,
-    )
+        )
+        .controller(GlobalController)
+}
+
+struct GlobalController;
+
+impl<T, W: Widget<T>> Controller<T, W> for GlobalController {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        match event {
+            Event::MouseUp(mouse_event) => {
+                ctx.submit_command(
+                    Command::new(commands::GLOBAL_MOUSE_UP, mouse_event.clone()),
+                    None,
+                );
+            }
+            _ => (),
+        }
+
+        child.event(ctx, event, data, env);
+    }
 }
 
 fn make_menu<T: Data>() -> MenuDesc<T> {

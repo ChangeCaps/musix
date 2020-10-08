@@ -32,15 +32,11 @@ pub struct Track {
 
 impl Track {
     pub fn new() -> Self {
-        Self {
-            blocks: Vec::new(),
-        }
+        Self { blocks: Vec::new() }
     }
 
     pub fn empty() -> Self {
-        Self {
-            blocks: Vec::new(),
-        }
+        Self { blocks: Vec::new() }
     }
 
     pub fn get_idx(&self, beat: usize) -> Option<usize> {
@@ -115,28 +111,39 @@ impl Track {
     }
 
     /// Adds a block or atleast it tries
-    pub fn add_block(&mut self, audio_id: crate::audio::AudioID, a: usize, b: usize) -> Result<(), ()> {
+    pub fn add_block(
+        &mut self,
+        audio_id: crate::audio::AudioID,
+        audio_block_id: crate::AudioBlockID,
+        a: usize,
+        b: usize,
+    ) -> Result<(), ()> {
         let start = a.min(b);
         let end = a.max(b);
 
-        let block = Block::new(end-start, audio_id);
+        let block = Block::new(end - start, audio_id, audio_block_id);
 
         for i in 0..self.blocks.len() {
             let b_end = self.get_end(i);
-            
-            if start > b_end && self.blocks.get(i+1).map(|_| end < self.get_start(i + 1)).unwrap_or(true) {
+
+            if start > b_end
+                && self
+                    .blocks
+                    .get(i + 1)
+                    .map(|_| end < self.get_start(i + 1))
+                    .unwrap_or(true)
+            {
                 self.blocks.insert(i + 1, (start - b_end, block));
 
                 if i + 2 < self.blocks.len() {
                     self.blocks[i + 2].0 -= start - b_end + (end - start);
                 }
 
-                return Ok(())
+                return Ok(());
             }
         }
 
         if self.blocks.len() > 0 {
-
         } else {
             self.blocks.push((start, block));
             return Ok(());
@@ -189,12 +196,21 @@ impl Track {
 #[derive(Data, Clone, PartialEq)]
 pub struct Block {
     length: usize,
-    id: crate::audio::AudioID,
+    audio_id: crate::audio::AudioID,
+    audio_block_id: crate::AudioBlockID,
 }
 
 impl Block {
-    fn new(length: usize, id: crate::audio::AudioID) -> Self {
-        Self { length, id }
+    fn new(
+        length: usize,
+        audio_id: crate::audio::AudioID,
+        audio_block_id: crate::AudioBlockID,
+    ) -> Self {
+        Self {
+            length,
+            audio_id,
+            audio_block_id,
+        }
     }
 }
 
@@ -387,6 +403,7 @@ impl Widget<AppState> for ArrangementWidget {
     }
 }
 
+#[derive(Clone)]
 pub enum Selection {
     Start(usize),
     End(usize),
@@ -419,7 +436,7 @@ impl Widget<AppState> for TrackWidget {
                 self.selection = track.get_selection(beat);
             }
 
-            Event::MouseUp(mouse_event) if mouse_event.button.is_left() => {
+            Event::Command(cmd) if cmd.is(commands::GLOBAL_MOUSE_UP) => {
                 self.selection = None;
             }
 
@@ -438,26 +455,35 @@ impl Widget<AppState> for TrackWidget {
                 let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
                 let beat = (mouse_event.pos.x / beat_size).round() as usize;
 
-                if let Some(selection) = &self.selection {
+                if let Some(selection) = self.selection.clone() {
                     let track = &mut Arc::make_mut(&mut data.arrangement.tracks)[self.idx];
 
                     match selection {
                         Selection::Start(i) => {
-                            if track.move_start(*i, beat).is_ok() {
+                            if track.move_start(i, beat).is_ok() {
                                 ctx.request_paint();
                             }
                         }
 
                         Selection::End(i) => {
-                            if track.move_end(*i, beat).is_ok() {
+                            if track.move_end(i, beat).is_ok() {
                                 ctx.request_paint();
                             }
                         }
 
-                        Selection::New(i) if beat != *i && data.selected_audio_block.is_some() => {
-                            if track.add_block(data.audio_blocks[&data.selected_audio_block.unwrap()].audio_id, *i, beat).is_ok() {
+                        Selection::New(i) if beat != i && data.selected_audio_block.is_some() => {
+                            if track
+                                .add_block(
+                                    data.audio_blocks[&data.selected_audio_block.unwrap()].audio_id,
+                                    data.selected_audio_block.unwrap(),
+                                    i,
+                                    beat,
+                                )
+                                .is_ok()
+                            {
                                 ctx.request_paint();
-                                log::info!("added, {}, {}", *i, beat);
+                                self.selection = track.get_selection(beat);
+                                log::info!("added, {}, {}", i, beat);
                             }
                         }
 
@@ -505,10 +531,10 @@ impl Widget<AppState> for TrackWidget {
             let prev_block = prev_block_idx.map(|i| &track.blocks[i].1);
 
             let color = block
-                .map(|b| Color::rgb(0.7, 0.2, 0.2))
+                .map(|b| data.audio_blocks[&b.audio_block_id].color.clone())
                 .unwrap_or(Color::WHITE);
             let prev_color = prev_block
-                .map(|b| Color::rgb(0.7, 0.2, 0.2))
+                .map(|b| data.audio_blocks[&b.audio_block_id].color.clone())
                 .unwrap_or(Color::WHITE);
 
             let offset = if prev_block.is_some() || block.is_none() {
