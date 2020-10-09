@@ -24,7 +24,6 @@ mod commands {
     pub const ARRANGEMENT_REMOVE_TRACK: Selector<usize> = Selector::new("arrangement.remove-track");
     pub const ARRANGEMENT_UPDATE_PLAY_LINE: Selector<f64> =
         Selector::new("arrangement.update-play-line");
-    //pub const ARRANGEMENT_ADD_BLOCK: Selector<>
 }
 
 mod settings {
@@ -84,7 +83,7 @@ impl AudioBlock {
     pub fn new(audio_id: audio::AudioID) -> Self {
         Self {
             audio_id,
-            len_beats: 0,
+            len_beats: 2,
             color: Color::rgb(0.7, 0.2, 0.2),
         }
     }

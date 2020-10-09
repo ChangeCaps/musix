@@ -1,6 +1,6 @@
-use crate::{commands, settings, theme, AppState, AudioBlock, AudioBlockID};
+use crate::{audio::AudioID, commands, settings, theme, AppState, AudioBlockID};
 use druid::{widget::*, *};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 #[derive(Clone, Data, Lens)]
 pub struct Arrangement {
@@ -17,7 +17,7 @@ impl Arrangement {
     }
 
     pub fn add_track(&mut self) {
-        Arc::make_mut(&mut self.tracks).push(Track::empty())
+        Arc::make_mut(&mut self.tracks).push(Track::new())
     }
 
     pub fn remove_track(&mut self, idx: usize) {
@@ -25,189 +25,138 @@ impl Arrangement {
     }
 }
 
-#[derive(Clone)]
+// A battle was fought here, it was long, it was tough, but in the end, the world was better for
+// it.
+//      -Hjalte Nannestad, during the rewrite of the track struct of October 2020.
+#[derive(Clone, Default)]
 pub struct Track {
-    blocks: Vec<(usize, Block)>,
+    beats: HashMap<usize, usize>,
+    blocks: Vec<Block>,
 }
 
 impl Track {
     pub fn new() -> Self {
-        Self { blocks: Vec::new() }
-    }
-
-    pub fn empty() -> Self {
-        Self { blocks: Vec::new() }
-    }
-
-    pub fn get_idx(&self, beat: usize) -> Option<usize> {
-        let mut place = 0;
-
-        for (i, (space, block)) in self.blocks.iter().enumerate() {
-            place += space;
-
-            if beat < place {
-                return None;
-            }
-
-            place += block.length;
-
-            if beat < place {
-                return Some(i);
-            }
-        }
-
-        None
-    }
-
-    pub fn get_block(&self, beat: usize) -> Option<&Block> {
-        self.get_idx(beat).map(|i| &self.blocks[i].1)
+        Self::default()
     }
 
     pub fn get_selection(&self, beat: usize) -> Option<Selection> {
-        // FIXME: this is bad, very bad, please find a better way to do this. please.
-        //      -Hjalte Nannestad 10-09-2020
-
-        if let Some(i) = self.get_idx(beat) {
-            log::info!("idx: {}", i);
-            if beat == self.get_start(i) {
-                log::info!("selected start of: {}", i);
-                Some(Selection::Start(i))
-            } else {
-                None
-            }
-        } else if let Some(i) = self.get_idx(beat - 1) {
-            if beat == self.get_end(i) {
-                log::info!("selected end of: {}", i);
-                Some(Selection::End(i))
-            } else {
-                None
-            }
-        } else {
-            log::info!("selected new: {}", beat);
-            Some(Selection::New(beat))
-        }
-    }
-
-    pub fn get_start(&self, idx: usize) -> usize {
-        let mut start = 0;
-
-        for i in 0..idx {
-            start += self.blocks[i].0;
-            start += self.blocks[i].1.length;
-        }
-
-        start + self.blocks[idx].0
-    }
-
-    pub fn get_end(&self, idx: usize) -> usize {
-        let mut end = 0;
-
-        for i in 0..idx + 1 {
-            end += self.blocks[i].0;
-            end += self.blocks[i].1.length;
-        }
-
-        end
-    }
-
-    /// Adds a block or atleast it tries
-    pub fn add_block(
-        &mut self,
-        audio_id: crate::audio::AudioID,
-        audio_block_id: crate::AudioBlockID,
-        a: usize,
-        b: usize,
-    ) -> Result<(), ()> {
-        let start = a.min(b);
-        let end = a.max(b);
-
-        let block = Block::new(end - start, audio_id, audio_block_id);
-
-        for i in 0..self.blocks.len() {
-            let b_end = self.get_end(i);
-
-            if start > b_end
-                && self
-                    .blocks
-                    .get(i + 1)
-                    .map(|_| end < self.get_start(i + 1))
-                    .unwrap_or(true)
-            {
-                self.blocks.insert(i + 1, (start - b_end, block));
-
-                if i + 2 < self.blocks.len() {
-                    self.blocks[i + 2].0 -= start - b_end + (end - start);
-                }
-
-                return Ok(());
-            }
-        }
-
-        if self.blocks.len() > 0 {
-        } else {
-            self.blocks.push((start, block));
-            return Ok(());
-        }
-
-        Err(())
-    }
-
-    /// Moves the start of a block
-    pub fn move_start(&mut self, idx: usize, target: usize) -> Result<(), ()> {
-        let end = if idx > 0 { self.get_end(idx - 1) } else { 0 };
-
-        if target < end || target >= self.get_end(idx) {
-            Err(())
-        } else {
-            let blocks = &mut self.blocks;
-            let old_offset = blocks[idx].0;
-            blocks[idx].0 = target - end;
-            blocks[idx].1.length += old_offset - blocks[idx].0;
-
-            Ok(())
-        }
-    }
-
-    pub fn move_end(&mut self, idx: usize, target: usize) -> Result<(), ()> {
-        let start = self.get_start(idx);
-
-        if self
-            .blocks
-            .get(idx + 1)
-            .map(|_| target > self.get_start(idx + 1))
-            .unwrap_or(false)
-            || target <= self.get_start(idx)
+        let selected = self.beats.get(&beat);
+        let prev_selected = self.beats.get(&(beat - 1));
+        if selected.is_some() && self.blocks[*selected.unwrap()].bounds.start == beat {
+            Some(Selection::Some(beat, *selected.unwrap()))
+        } else if prev_selected.is_some() && self.blocks[*prev_selected.unwrap()].bounds.end == beat
         {
-            Err(())
+            Some(Selection::Some(beat, *prev_selected.unwrap()))
         } else {
-            let blocks = &mut self.blocks;
-            let old_length = blocks[idx].1.length;
-            blocks[idx].1.length = target - start;
+            Some(Selection::None(beat))
+        }
+    }
 
-            if blocks.len() > idx + 1 {
-                blocks[idx + 1].0 += old_length - blocks[idx].1.length;
+    pub fn calculate_beats(&mut self) {
+        self.beats.clear();
+
+        let mut place = 0;
+
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            for i in place..block.bounds.end {
+                self.beats.insert(i, block_index);
             }
 
-            Ok(())
+            place = block.bounds.end;
+        }
+    }
+
+    pub fn get_block(&self, beat: usize) -> Option<&Block> {
+        if let Some(beat_index) = self.beats.get(&beat) {
+            if beat >= self.blocks[*beat_index].bounds.start {
+                Some(&self.blocks[*beat_index])
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn get_space(&self, block_index: usize) -> Range<usize> {
+        let start = if let Some(block) = self.blocks.get(block_index - 1) {
+            block.bounds.end
+        } else {
+            0
+        };
+
+        let end = if let Some(block) = self.blocks.get(block_index + 1) {
+            block.bounds.start
+        } else {
+            usize::MAX
+        };
+
+        start..end
+    }
+
+    pub fn move_block_bound(&mut self, block_index: usize, bound: usize, target: usize) -> bool {
+        let space = self.get_space(block_index);
+
+        match bound {
+            b if b == self.blocks[block_index].bounds.start => {
+                if target >= space.start && target < self.blocks[block_index].bounds.end {
+                    self.blocks[block_index].bounds.start = target;
+                    self.calculate_beats();
+                    true
+                } else {
+                    false
+                }
+            }
+            b if b == self.blocks[block_index].bounds.end => {
+                if target <= space.end && target > self.blocks[block_index].bounds.start {
+                    self.blocks[block_index].bounds.end = target;
+                    self.calculate_beats();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub fn add_block(&mut self, block: Block) -> bool {
+        let start_index = self.beats.get(&block.bounds.start);
+        let end_index = self.beats.get(&block.bounds.end);
+
+        if start_index == end_index {
+            if let Some(index) = start_index {
+                if block.bounds.end < self.blocks[*index].bounds.start {
+                    self.blocks.insert(*index, block);
+                    self.calculate_beats();
+
+                    true
+                } else {
+                    false
+                }
+            } else {
+                self.blocks.push(block);
+                self.calculate_beats();
+
+                true
+            }
+        } else {
+            false
         }
     }
 }
 
-#[derive(Data, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Block {
-    length: usize,
-    audio_id: crate::audio::AudioID,
-    audio_block_id: crate::AudioBlockID,
+    bounds: Range<usize>,
+    audio_id: AudioID,
+    audio_block_id: AudioBlockID,
 }
 
 impl Block {
-    fn new(
-        length: usize,
-        audio_id: crate::audio::AudioID,
-        audio_block_id: crate::AudioBlockID,
-    ) -> Self {
+    fn new(bounds: Range<usize>, audio_id: AudioID, audio_block_id: AudioBlockID) -> Self {
         Self {
-            length,
+            bounds,
             audio_id,
             audio_block_id,
         }
@@ -405,9 +354,8 @@ impl Widget<AppState> for ArrangementWidget {
 
 #[derive(Clone)]
 pub enum Selection {
-    Start(usize),
-    End(usize),
-    New(usize),
+    Some(usize, usize),
+    None(usize),
 }
 
 pub struct TrackWidget {
@@ -459,35 +407,27 @@ impl Widget<AppState> for TrackWidget {
                     let track = &mut Arc::make_mut(&mut data.arrangement.tracks)[self.idx];
 
                     match selection {
-                        Selection::Start(i) => {
-                            if track.move_start(i, beat).is_ok() {
-                                ctx.request_paint();
+                        Selection::Some(selected_beat, block_index) => {
+                            if track.move_block_bound(block_index, selected_beat, beat) {
+                                self.selection = Some(Selection::Some(beat, block_index));
                             }
                         }
 
-                        Selection::End(i) => {
-                            if track.move_end(i, beat).is_ok() {
-                                ctx.request_paint();
+                        Selection::None(selected_beat) => {
+                            if let Some(selected_audio_block_id) = data.selected_audio_block {
+                                if beat != selected_beat {
+                                    if track.add_block(Block::new(
+                                        beat.min(selected_beat)..beat.max(selected_beat),
+                                        data.audio_blocks[&selected_audio_block_id]
+                                            .clone()
+                                            .audio_id,
+                                        selected_audio_block_id,
+                                    )) {
+                                        //self.selection = Some(Selection::Some(beat));
+                                    }
+                                }
                             }
                         }
-
-                        Selection::New(i) if beat != i && data.selected_audio_block.is_some() => {
-                            if track
-                                .add_block(
-                                    data.audio_blocks[&data.selected_audio_block.unwrap()].audio_id,
-                                    data.selected_audio_block.unwrap(),
-                                    i,
-                                    beat,
-                                )
-                                .is_ok()
-                            {
-                                ctx.request_paint();
-                                self.selection = track.get_selection(beat);
-                                log::info!("added, {}, {}", i, beat);
-                            }
-                        }
-
-                        _ => (),
                     }
                 }
             }
@@ -505,7 +445,10 @@ impl Widget<AppState> for TrackWidget {
     ) {
     }
 
-    fn update(&mut self, _ctx: &mut UpdateCtx, _old_data: &AppState, _data: &AppState, _env: &Env) {
+    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &AppState, data: &AppState, _env: &Env) {
+        if !data.same(old_data) {
+            ctx.request_paint();
+        }
     }
 
     fn layout(
@@ -525,16 +468,15 @@ impl Widget<AppState> for TrackWidget {
         let track = &data.arrangement.tracks[self.idx];
 
         while place < ctx.size().width {
-            let block_idx = track.get_idx((place / beat_size).floor() as usize);
-            let prev_block_idx = track.get_idx((place / beat_size).floor() as usize - 1);
-            let block = block_idx.map(|i| &track.blocks[i].1);
-            let prev_block = prev_block_idx.map(|i| &track.blocks[i].1);
+            let beat = (place / beat_size).floor() as usize;
+            let block = track.get_block(beat);
+            let prev_block = track.get_block(beat - 1);
+            let audio_block = block.map(|b| &data.audio_blocks[&b.audio_block_id]);
+            let prev_audio_block = prev_block.map(|b| &data.audio_blocks[&b.audio_block_id]);
 
-            let color = block
-                .map(|b| data.audio_blocks[&b.audio_block_id].color.clone())
-                .unwrap_or(Color::WHITE);
-            let prev_color = prev_block
-                .map(|b| data.audio_blocks[&b.audio_block_id].color.clone())
+            let color = audio_block.map(|b| b.color.clone()).unwrap_or(Color::WHITE);
+            let prev_color = prev_audio_block
+                .map(|b| b.color.clone())
                 .unwrap_or(Color::WHITE);
 
             let offset = if prev_block.is_some() || block.is_none() {
@@ -549,9 +491,21 @@ impl Widget<AppState> for TrackWidget {
             );
             ctx.fill(rect, &color);
 
+            if let Some(audio_block) = audio_block {
+                if (beat - block.unwrap().bounds.start) % audio_block.len_beats == 0
+                    && beat != block.unwrap().bounds.start
+                {
+                    let rect = Rect::from_origin_size(
+                        (place - 2.0 / 2.0, ctx.size().height / 2.0 - 8.0 / 2.0),
+                        (2.0, 8.0),
+                    );
+                    ctx.fill(rect, &color);
+                }
+            }
+
             // small circle drawn at the end of each block
             if let Some(_prev_block) = prev_block {
-                if block_idx != prev_block_idx {
+                if block != prev_block {
                     let circle = kurbo::Circle::new((place, ctx.size().height / 2.0), 4.0);
                     ctx.fill(circle, &prev_color);
                 }
@@ -560,7 +514,7 @@ impl Widget<AppState> for TrackWidget {
             // large circle drawn at the start of each block
             // TODO: fix white line overlap
             if let Some(_block) = block {
-                if block_idx != prev_block_idx {
+                if block != prev_block {
                     let circle = kurbo::Circle::new((place, ctx.size().height / 2.0), 6.0);
                     ctx.stroke(circle, &color, 1.0);
                 }
