@@ -6,7 +6,7 @@ mod audio;
 mod deligate;
 mod widgets;
 
-use arrangement::*;
+use widgets::arrangement::*;
 
 mod commands {
     use druid::MouseEvent;
@@ -32,11 +32,13 @@ mod settings {
     pub const ARRANGEMENT_SCROLL_SPEED: Key<f64> = Key::new("arrangement.scroll-speed");
     pub const ARRANGEMENT_BEAT_SIZE: Key<f64> = Key::new("arrangement.beat-size");
     pub const ARRANGEMENT_TRACK_HEIGHT: Key<f64> = Key::new("arrangement.track-height");
+    pub const ARRANGEMENT_BEATS_PER_SECOND: Key<f64> = Key::new("arrangement.beats-per-second");
 
     pub fn default(env: &mut druid::Env) {
         env.set(ARRANGEMENT_SCROLL_SPEED, 0.1);
         env.set(ARRANGEMENT_BEAT_SIZE, 40.0);
         env.set(ARRANGEMENT_TRACK_HEIGHT, 20.0);
+        env.set(ARRANGEMENT_BEATS_PER_SECOND, 60.0 / 120.0);
     }
 }
 
@@ -74,16 +76,28 @@ pub struct AudioBlockID(pub usize);
 
 #[derive(Clone, Data, Lens)]
 pub struct AudioBlock {
-    audio_id: audio::AudioID,
+    audio_id: audio::AudioSourceID,
+    format: audio::AudioSourceFormat,
     len_beats: usize,
+    true_len_beats: usize,
     color: Color,
 }
 
 impl AudioBlock {
-    pub fn new(audio_id: audio::AudioID) -> Self {
+    pub fn new(
+        audio_id: audio::AudioSourceID,
+        format: audio::AudioSourceFormat,
+        beats_per_second: f64,
+    ) -> Self {
+        let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64
+            * beats_per_second)
+            .ceil() as usize;
+
         Self {
             audio_id,
-            len_beats: 2,
+            format,
+            len_beats: true_len_beats,
+            true_len_beats,
             color: Color::rgb(0.7, 0.2, 0.2),
         }
     }
@@ -180,20 +194,26 @@ fn create_top_bar() -> impl Widget<AppState> {
         .with_child(ViewSwitcher::new(
             |data: &AppState, _| data.playing,
             |selector, _, _| match selector {
-                true => Box::new(Button::new("Stop").on_click(
-                    |_ctx, data: &mut AppState, _env| {
+                true => Box::new(
+                    Button::new("Stop").on_click(|_ctx, data: &mut AppState, env| {
                         data.playing = false;
                         data.audio_engine_handle.set_playing(false);
 
-                        if let Some(id) = data.audio_engine_handle.stop_recording() {
-                            Arc::make_mut(&mut data.audio_blocks)
-                                .insert(data.next_audio_block_id, AudioBlock::new(id));
+                        if let Some((id, format)) = data.audio_engine_handle.stop_recording() {
+                            Arc::make_mut(&mut data.audio_blocks).insert(
+                                data.next_audio_block_id,
+                                AudioBlock::new(
+                                    id,
+                                    format,
+                                    env.get(settings::ARRANGEMENT_BEATS_PER_SECOND),
+                                ),
+                            );
                             Arc::make_mut(&mut data.shown_audio_blocks)
                                 .push(data.next_audio_block_id);
                             data.next_audio_block_id.0 += 1;
                         }
-                    },
-                )),
+                    }),
+                ),
                 false => Box::new(
                     Flex::row()
                         .with_child(Button::new("Play").on_click(

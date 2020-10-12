@@ -8,7 +8,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, druid::Data)]
-pub struct AudioID(pub usize);
+pub struct AudioSourceID(pub usize);
 
 pub enum Command {
     SetPlaying(bool),
@@ -18,7 +18,7 @@ pub enum Command {
 }
 
 pub enum CommandResponse {
-    SetRecording(Option<AudioID>),
+    SetRecording(Option<(AudioSourceID, AudioSourceFormat)>),
 }
 
 #[derive(Clone, druid::Data)]
@@ -40,7 +40,7 @@ impl AudioEngineHandle {
         self.sender.send(Command::SetRecording(true)).unwrap();
     }
 
-    pub fn stop_recording(&self) -> Option<AudioID> {
+    pub fn stop_recording(&self) -> Option<(AudioSourceID, AudioSourceFormat)> {
         self.sender.send(Command::SetRecording(false)).unwrap();
 
         match self.receiver.recv().unwrap() {
@@ -53,9 +53,17 @@ impl AudioEngineHandle {
     }
 }
 
+#[derive(Clone, Debug, druid::Data)]
+pub struct AudioSourceFormat {
+    pub sample_rate: u32,
+    pub len_frames: u32,
+    pub channels: u32,
+}
+
 pub trait AudioSource {
     fn get_sample(&self, frame: u32, channel: u32) -> Option<f32>;
     fn length_secs(&self) -> f64;
+    fn format(&self) -> AudioSourceFormat;
 }
 
 pub struct AudioClip {
@@ -98,6 +106,14 @@ impl AudioSource for AudioClip {
     fn length_secs(&self) -> f64 {
         self.len_frames as f64 / self.sample_rate as f64
     }
+
+    fn format(&self) -> AudioSourceFormat {
+        AudioSourceFormat {
+            sample_rate: self.sample_rate,
+            len_frames: self.len_frames,
+            channels: self.channels,
+        }
+    }
 }
 
 pub struct AudioEngine {
@@ -106,8 +122,8 @@ pub struct AudioEngine {
     event_sink: druid::ExtEventSink,
     volume: f64,
     feedback: bool,
-    sources: HashMap<AudioID, Box<dyn AudioSource + Send + Sync>>,
-    next_audio_id: AudioID,
+    sources: HashMap<AudioSourceID, Box<dyn AudioSource + Send + Sync>>,
+    next_audio_id: AudioSourceID,
 }
 
 impl AudioEngine {
@@ -123,7 +139,7 @@ impl AudioEngine {
                 receiver: e_receiver,
                 sender: e_sender,
                 sources: HashMap::new(),
-                next_audio_id: AudioID(0),
+                next_audio_id: AudioSourceID(0),
             },
             AudioEngineHandle {
                 sender: std::sync::Arc::new(h_sender),
@@ -209,10 +225,14 @@ impl AudioEngine {
                                             let id = self.next_audio_id;
                                             self.next_audio_id.0 += 1;
 
+                                            let format = recording_clip.format();
+
                                             self.sources.insert(id, Box::new(recording_clip));
 
                                             self.sender
-                                                .send(CommandResponse::SetRecording(Some(id)))
+                                                .send(CommandResponse::SetRecording(Some((
+                                                    id, format,
+                                                ))))
                                                 .unwrap();
                                         } else {
                                             self.sender
