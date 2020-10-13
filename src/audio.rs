@@ -197,7 +197,7 @@ impl AudioEngine {
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     for sample in data {
-                        if let Err(e) = producer.push(*sample) {
+                        if let Err(_e) = producer.push(*sample) {
                             //error!("output stream fell behind '{}', increase latency", e);
                         }
                     }
