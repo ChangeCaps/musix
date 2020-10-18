@@ -1,4 +1,8 @@
-use crate::{audio::AudioSourceID, AudioBlockID, widgets::arrangement::*};
+use crate::{
+    audio::{AudioSourceFormat, AudioSourceID},
+    widgets::arrangement::*,
+    AudioBlockID,
+};
 use druid::*;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
@@ -22,6 +26,14 @@ impl Arrangement {
 
     pub fn remove_track(&mut self, idx: usize) {
         Arc::make_mut(&mut self.tracks).remove(idx);
+    }
+
+    pub fn compile_index(&self) -> ArrangementAudioSourceIndex {
+        let mut arrangement_index = ArrangementAudioSourceIndex::default();
+
+
+
+        arrangement_index
     }
 }
 
@@ -147,6 +159,16 @@ impl Track {
             None
         }
     }
+
+    pub fn compile_index(&self, arrangement_index: &mut ArrangementAudioSourceIndex) {
+        for block in &self.blocks {
+            for beat in block.bounds.start..block.bounds.end {
+                let relative_beat = beat - block.bounds.start;
+                
+                //if relative_beat % 
+            }
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -154,16 +176,32 @@ pub struct Block {
     pub bounds: Range<usize>,
     pub audio_id: AudioSourceID,
     pub audio_block_id: AudioBlockID,
+    pub format: AudioSourceFormat,
 }
 
 impl Block {
-    pub fn new(bounds: Range<usize>, audio_id: AudioSourceID, audio_block_id: AudioBlockID) -> Self {
+    pub fn new(
+        bounds: Range<usize>,
+        audio_id: AudioSourceID,
+        audio_block_id: AudioBlockID,
+        format: AudioSourceFormat,
+    ) -> Self {
         Self {
             bounds,
             audio_id,
             audio_block_id,
+            format,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct AudioSourceIndex {
+    pub audio_source_id: AudioSourceID,
+    pub frame_offset: usize,
+}
 
+#[derive(Default)]
+pub struct ArrangementAudioSourceIndex {
+    pub beats: HashMap<usize, Vec<AudioSourceIndex>>,
+}

@@ -1,4 +1,4 @@
-use crate::{commands, settings, theme, AppState, arrangement::*};
+use crate::{arrangement::*, commands, settings, theme, AppState};
 use druid::{widget::*, *};
 use std::sync::Arc;
 
@@ -255,12 +255,14 @@ impl Widget<AppState> for TrackWidget {
                         Selection::None(selected_beat) => {
                             if let Some(selected_audio_block_id) = data.selected_audio_block {
                                 if beat != selected_beat {
+                                    let audio_block =
+                                        data.audio_blocks[&selected_audio_block_id].clone();
+
                                     if let Some(index) = track.add_block(Block::new(
                                         beat.min(selected_beat)..beat.max(selected_beat),
-                                        data.audio_blocks[&selected_audio_block_id]
-                                            .clone()
-                                            .audio_id,
+                                        audio_block.audio_id,
                                         selected_audio_block_id,
+                                        audio_block.format,
                                     )) {
                                         self.selection = Some(Selection::Some(beat, index));
                                     }

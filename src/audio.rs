@@ -53,7 +53,7 @@ impl AudioEngineHandle {
     }
 }
 
-#[derive(Clone, Debug, druid::Data)]
+#[derive(Clone, Debug, druid::Data, PartialEq)]
 pub struct AudioSourceFormat {
     pub sample_rate: u32,
     pub len_frames: u32,
