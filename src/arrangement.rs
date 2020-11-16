@@ -1,7 +1,7 @@
 use crate::{
     audio::{AudioSourceFormat, AudioSourceID},
     widgets::arrangement::*,
-    AudioBlockID,
+    AudioBlockID, AudioBlock,
 };
 use druid::*;
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -28,10 +28,12 @@ impl Arrangement {
         Arc::make_mut(&mut self.tracks).remove(idx);
     }
 
-    pub fn compile_index(&self) -> ArrangementAudioSourceIndex {
+    pub fn compile_index(&self, audio_blocks: &HashMap<AudioBlockID, AudioBlock>) -> ArrangementAudioSourceIndex {
         let mut arrangement_index = ArrangementAudioSourceIndex::default();
 
-
+        for track in &*self.tracks {
+            track.compile_index(&mut arrangement_index, audio_blocks);
+        }
 
         arrangement_index
     }
@@ -53,7 +55,7 @@ impl Track {
 
     pub fn get_selection(&self, beat: usize) -> Option<Selection> {
         let selected = self.beats.get(&beat);
-        let prev_selected = self.beats.get(&(beat - 1));
+        let prev_selected = if beat > 0 { self.beats.get(&(beat - 1)) } else { None };
         if selected.is_some() && self.blocks[*selected.unwrap()].bounds.start == beat {
             Some(Selection::Some(beat, *selected.unwrap()))
         } else if prev_selected.is_some() && self.blocks[*prev_selected.unwrap()].bounds.end == beat
@@ -91,7 +93,9 @@ impl Track {
     }
 
     pub fn get_space(&self, block_index: usize) -> Range<usize> {
-        let start = if let Some(block) = self.blocks.get(block_index - 1) {
+        let start = if block_index == 0 {
+            0
+        } else if let Some(block) = self.blocks.get(block_index - 1) {
             block.bounds.end
         } else {
             0
@@ -160,21 +164,41 @@ impl Track {
         }
     }
 
-    pub fn compile_index(&self, arrangement_index: &mut ArrangementAudioSourceIndex) {
+    pub fn compile_index(&self, arrangement_index: &mut ArrangementAudioSourceIndex, audio_blocks: &HashMap<AudioBlockID, AudioBlock>) {
         for block in &self.blocks {
-            for beat in block.bounds.start..block.bounds.end {
-                let relative_beat = beat - block.bounds.start;
-                
-                //if relative_beat % 
+            let audio_block = &audio_blocks[&block.audio_block_id];
+
+            for play_cycle in 0..(block.bounds.end - block.bounds.start) / audio_block.len_beats {
+                for relative_beat in 0..audio_block.true_len_beats {
+                    let cycle_offset = play_cycle * audio_block.len_beats;
+
+                    let beat = block.bounds.start + relative_beat + cycle_offset;
+                    
+                    let audio_source_index = AudioSourceIndex {
+                        audio_source_id: audio_block.audio_id,
+                        beats_offset: relative_beat as f32,
+                    };
+
+                    arrangement_index.beats.entry(beat).or_insert(Vec::new()).push(audio_source_index);
+                }
             }
         }
     }
 }
 
+
+/// Block describe which audiosources should be played when.
+/// It contains an [`AudioBlockID`] pointing to an [`AudioBlock`] describing the visual characteristics of the block.
+/// 
+/// The Block contains a [`Range`] called bounds, which describes which beats the [`AudioSource`] should be played on.
+/// 
+/// bounds: 2..4
+/// | | | |
+/// | *-* |
+/// | | | |
 #[derive(Clone, PartialEq)]
 pub struct Block {
     pub bounds: Range<usize>,
-    pub audio_id: AudioSourceID,
     pub audio_block_id: AudioBlockID,
     pub format: AudioSourceFormat,
 }
@@ -182,13 +206,11 @@ pub struct Block {
 impl Block {
     pub fn new(
         bounds: Range<usize>,
-        audio_id: AudioSourceID,
         audio_block_id: AudioBlockID,
         format: AudioSourceFormat,
     ) -> Self {
         Self {
             bounds,
-            audio_id,
             audio_block_id,
             format,
         }
@@ -198,7 +220,7 @@ impl Block {
 #[derive(Clone, Debug)]
 pub struct AudioSourceIndex {
     pub audio_source_id: AudioSourceID,
-    pub frame_offset: usize,
+    pub beats_offset: f32,
 }
 
 #[derive(Default)]

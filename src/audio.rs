@@ -1,4 +1,4 @@
-use crate::commands::*;
+use crate::{commands::*, arrangement::*};
 use cpal::traits::*;
 use druid::Target;
 use log::*;
@@ -15,6 +15,8 @@ pub enum Command {
     SetRecording(bool),
     SetPlayTime(f64),
     SetFeedback(bool),
+    SetBeatsPerSecond(f64),
+    SetArrangementAudioSourceIndex(ArrangementAudioSourceIndex),
 }
 
 pub enum CommandResponse {
@@ -51,6 +53,10 @@ impl AudioEngineHandle {
     pub fn set_feedback(&self, val: bool) {
         self.sender.send(Command::SetFeedback(val)).unwrap();
     }
+
+    pub fn set_arrangement_index(&self, index: ArrangementAudioSourceIndex) {
+        self.sender.send(Command::SetArrangementAudioSourceIndex(index)).unwrap();
+    }
 }
 
 #[derive(Clone, Debug, druid::Data, PartialEq)]
@@ -58,10 +64,11 @@ pub struct AudioSourceFormat {
     pub sample_rate: u32,
     pub len_frames: u32,
     pub channels: u32,
+    pub beats_per_second: f64,
 }
 
 pub trait AudioSource {
-    fn get_sample(&self, frame: u32, channel: u32) -> Option<f32>;
+    fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32>;
     fn length_secs(&self) -> f64;
     fn format(&self) -> AudioSourceFormat;
 }
@@ -71,36 +78,43 @@ pub struct AudioClip {
     len_frames: u32,
     channels: u32,
     samples: Vec<f32>,
+    beats_per_second: f64,
 }
 
 impl AudioClip {
-    pub fn new(sample_rate: u32, channels: u32, samples: Vec<f32>) -> Self {
+    pub fn new(sample_rate: u32, channels: u32, samples: Vec<f32>, beats_per_second: f64) -> Self {
         Self {
             sample_rate,
-            len_frames: samples.len() as u32 / sample_rate / channels,
+            len_frames: samples.len() as u32 / channels,
             channels,
             samples,
+            beats_per_second,
         }
     }
 
-    pub fn empty(sample_rate: u32, channels: u32) -> Self {
+    pub fn empty(sample_rate: u32, channels: u32, beats_per_second: f64) -> Self {
         Self {
             sample_rate,
             channels,
             len_frames: 0,
             samples: Vec::new(),
+            beats_per_second,
         }
     }
 
     pub fn append_sample(&mut self, sample: f32) {
         self.samples.push(sample);
-        self.len_frames = self.samples.len() as u32 / self.sample_rate / self.channels;
+        self.len_frames = self.samples.len() as u32 / self.channels;
+    }
+
+    pub fn clean(&mut self) {
+        self.samples.truncate(self.samples.len() - self.samples.len() % self.channels as usize);
     }
 }
 
 impl AudioSource for AudioClip {
-    fn get_sample(&self, frame: u32, channel: u32) -> Option<f32> {
-        self.samples.get((frame * channel) as usize).map(|x| *x)
+    fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32> {
+        self.samples.get(((frame as f64 * self.channels as f64 + channel as f64) * self.beats_per_second / beats_per_second).round() as usize).map(|x| *x)
     }
 
     fn length_secs(&self) -> f64 {
@@ -112,6 +126,7 @@ impl AudioSource for AudioClip {
             sample_rate: self.sample_rate,
             len_frames: self.len_frames,
             channels: self.channels,
+            beats_per_second: self.beats_per_second,
         }
     }
 }
@@ -121,6 +136,7 @@ pub struct AudioEngine {
     sender: Sender<CommandResponse>,
     event_sink: druid::ExtEventSink,
     volume: f64,
+    beats_per_second: f64,
     feedback: bool,
     sources: HashMap<AudioSourceID, Box<dyn AudioSource + Send + Sync>>,
     next_audio_id: AudioSourceID,
@@ -136,6 +152,7 @@ impl AudioEngine {
                 event_sink,
                 volume: 0.5,
                 feedback: true,
+                beats_per_second: 120.0 / 60.0,
                 receiver: e_receiver,
                 sender: e_sender,
                 sources: HashMap::new(),
@@ -192,6 +209,7 @@ impl AudioEngine {
             let mut playing = false;
             let mut volume = self.volume;
             let mut recording_clip: Option<AudioClip> = None;
+            let mut arrangement_index = ArrangementAudioSourceIndex::default();
 
             let input_stream = input_device.build_input_stream(
                 &config,
@@ -217,11 +235,13 @@ impl AudioEngine {
                                 Command::SetRecording(val) => {
                                     if val {
                                         recording_clip =
-                                            Some(AudioClip::empty(sample_rate, channels));
+                                            Some(AudioClip::empty(sample_rate, channels, self.beats_per_second));
                                     } else {
-                                        if let Some(recording_clip) =
+                                        if let Some(mut recording_clip) =
                                             std::mem::replace(&mut recording_clip, None)
                                         {
+                                            recording_clip.clean();
+
                                             let id = self.next_audio_id;
                                             self.next_audio_id.0 += 1;
 
@@ -245,7 +265,9 @@ impl AudioEngine {
                                     play_sample =
                                         (time * sample_rate as f64 * channels as f64) as u32;
                                 }
+                                Command::SetBeatsPerSecond(bps) => self.beats_per_second = bps,
                                 Command::SetFeedback(feedback) => self.feedback = feedback,
+                                Command::SetArrangementAudioSourceIndex(index) => arrangement_index = index,
                             }
                         }
 
@@ -264,12 +286,27 @@ impl AudioEngine {
                         channel = channel % channels;
 
                         if let Some(recording_clip) = &mut recording_clip {
-                            recording_clip.append_sample(*sample);
+                            if channel % channels == 0 || recording_clip.samples.len() > 0 {
+                                recording_clip.append_sample(*sample);
+                            }
                         }
 
                         if playing {
                             play_sample += 1;
                             play_frame = play_sample / channels;
+
+                            let beat = (play_frame as f64 / sample_rate as f64 * self.beats_per_second).floor() as u32;
+                            let beat_frame = play_frame % (sample_rate as f64 / self.beats_per_second).floor() as u32;
+
+                            if let Some(source_indices) = arrangement_index.beats.get(&(beat as usize)) {
+                                for source_index in source_indices {
+                                    let offset = (source_index.beats_offset as f64 * sample_rate as f64 / self.beats_per_second) as u32;
+
+                                    if let Some(source_sample) = self.sources[&source_index.audio_source_id].get_sample(beat_frame + offset, channel, self.beats_per_second) {
+                                        *sample += source_sample;
+                                    }
+                                }
+                            }
 
                             if play_frame % (sample_rate / 30) == 0 {
                                 self.event_sink

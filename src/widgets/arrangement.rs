@@ -76,7 +76,7 @@ impl Widget<AppState> for ArrangementWidget {
             Event::Command(cmd) if cmd.is(commands::ARRANGEMENT_UPDATE_PLAY_LINE) => {
                 let place = cmd.get_unchecked(commands::ARRANGEMENT_UPDATE_PLAY_LINE);
 
-                self.play_line = *place;
+                self.play_line = *place * env.get(settings::ARRANGEMENT_BEATS_PER_SECOND);
 
                 ctx.request_paint();
             }
@@ -260,7 +260,6 @@ impl Widget<AppState> for TrackWidget {
 
                                     if let Some(index) = track.add_block(Block::new(
                                         beat.min(selected_beat)..beat.max(selected_beat),
-                                        audio_block.audio_id,
                                         selected_audio_block_id,
                                         audio_block.format,
                                     )) {
@@ -311,7 +310,7 @@ impl Widget<AppState> for TrackWidget {
         while place < ctx.size().width {
             let beat = (place / beat_size).floor() as usize;
             let block = track.get_block(beat);
-            let prev_block = track.get_block(beat - 1);
+            let prev_block = if beat > 0 { track.get_block(beat - 1) } else { None };
             let audio_block = block.map(|b| &data.audio_blocks[&b.audio_block_id]);
             let prev_audio_block = prev_block.map(|b| &data.audio_blocks[&b.audio_block_id]);
 

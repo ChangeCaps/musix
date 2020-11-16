@@ -38,7 +38,7 @@ mod settings {
         env.set(ARRANGEMENT_SCROLL_SPEED, 0.1);
         env.set(ARRANGEMENT_BEAT_SIZE, 40.0);
         env.set(ARRANGEMENT_TRACK_HEIGHT, 20.0);
-        env.set(ARRANGEMENT_BEATS_PER_SECOND, 60.0 / 120.0);
+        env.set(ARRANGEMENT_BEATS_PER_SECOND, 120.0 / 60.0);
     }
 }
 
@@ -89,8 +89,7 @@ impl AudioBlock {
         format: audio::AudioSourceFormat,
         beats_per_second: f64,
     ) -> Self {
-        let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64
-            * beats_per_second)
+        let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64 * beats_per_second)
             .ceil() as usize;
 
         Self {
@@ -200,6 +199,8 @@ fn create_top_bar() -> impl Widget<AppState> {
                         data.audio_engine_handle.set_playing(false);
 
                         if let Some((id, format)) = data.audio_engine_handle.stop_recording() {
+                            log::info!("{:?}", format);
+
                             Arc::make_mut(&mut data.audio_blocks).insert(
                                 data.next_audio_block_id,
                                 AudioBlock::new(
@@ -220,6 +221,10 @@ fn create_top_bar() -> impl Widget<AppState> {
                             |_ctx, data: &mut AppState, _env| {
                                 data.playing = true;
                                 data.audio_engine_handle.set_playing(true);
+
+                                let arrangement_index = data.arrangement.compile_index(&data.audio_blocks);
+
+                                data.audio_engine_handle.set_arrangement_index(arrangement_index);
                             },
                         ))
                         .with_child(Button::new("Record").on_click(
