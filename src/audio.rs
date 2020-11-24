@@ -21,6 +21,7 @@ pub enum Command {
     SetFeedback(bool),
     SetBeatsPerSecond(f64),
     SetVolume(f64),
+    RemoveAudioSource(AudioSourceID),
     GetAudioSourceClone(AudioSourceID),
     SetArrangementAudioSourceIndex(ArrangementAudioSourceIndex),
 }
@@ -66,6 +67,12 @@ impl AudioEngineHandle {
         self.sender.send(Command::SetVolume(volume)).unwrap();
     }
 
+    pub fn set_beats_per_second(&self, beats_per_second: f64) {
+        self.sender
+            .send(Command::SetBeatsPerSecond(beats_per_second))
+            .unwrap();
+    }
+
     pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> Arc<dyn AudioSource> {
         self.sender
             .send(Command::GetAudioSourceClone(audio_source_id))
@@ -96,8 +103,7 @@ pub trait AudioSource: AudioSourceClone + Any {
     fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32>;
     fn format(&self) -> AudioSourceFormat;
 
-    /// This is type specification hell, please don't replicate, at all, please
-    fn widget(&self) -> Box<dyn druid::Widget<Arc<dyn AudioSource>>>;
+    fn widget(&self) -> Box<dyn druid::Widget<(Arc<dyn AudioSource>, crate::AudioBlock)>>;
 
     fn len_seconds(&self) -> f64 {
         let format = self.format();
@@ -172,7 +178,7 @@ impl AudioEngine {
                 output_device.default_output_config()?
             );
 
-            let config: cpal::StreamConfig = input_device.default_input_config()?.into();
+            let config: cpal::StreamConfig = output_device.default_output_config()?.into();
 
             const LATENCY_MS: f32 = 20.0;
 
@@ -188,9 +194,14 @@ impl AudioEngine {
                 producer.push(0.0).unwrap();
             }
 
+            let mut noise_level: f32 = 0.025;
+            let mut noise_sample = 0;
             let mut channel = 0;
             let mut play_sample: u32 = 0;
             let mut play_frame: u32 = 0;
+            let mut metronome = true;
+            let mut wait_for_input = true;
+            let mut waiting_for_input = false;
             let mut playing = false;
             let mut recording_clip: Option<AudioClip> = None;
             let mut arrangement_index = ArrangementAudioSourceIndex::default();
@@ -225,6 +236,12 @@ impl AudioEngine {
                                                 len_frames: 0,
                                                 beats_per_second: self.beats_per_second,
                                             }));
+
+                                        if wait_for_input {
+                                            waiting_for_input = true;
+                                        }
+
+                                        playing = true;
                                     } else {
                                         if let Some(mut recording_clip) =
                                             std::mem::replace(&mut recording_clip, None)
@@ -257,6 +274,9 @@ impl AudioEngine {
                                 Command::SetBeatsPerSecond(bps) => self.beats_per_second = bps,
                                 Command::SetFeedback(feedback) => self.feedback = feedback,
                                 Command::SetVolume(volume) => self.volume = volume,
+                                Command::RemoveAudioSource(audio_source_id) => {
+                                    self.sources.remove(&audio_source_id);
+                                }
                                 Command::GetAudioSourceClone(audio_source_id) => {
                                     self.sender
                                         .send(CommandResponse::GetAudioSourceClone(
@@ -284,14 +304,36 @@ impl AudioEngine {
                         channel += 1;
                         channel = channel % channels;
 
+                        if noise_sample > 0 {
+                            noise_sample -= 1;
+                            noise_level = noise_level.max(*sample);
+
+                            if noise_sample == 0 {
+                                info!("recorded noise level: {}", noise_level);
+                            }
+                        }
+
                         if let Some(recording_clip) = &mut recording_clip {
-                            if channel % channels == 0 || recording_clip.len_samples() > 0 {
+                            if (channel % channels == 0
+                                && (sample.abs() > noise_level * 1.2 || !waiting_for_input))
+                                || recording_clip.len_samples() > 0
+                            {
                                 recording_clip.append_sample(*sample);
                             }
                         }
 
                         if playing {
+                            if recording_clip.is_some()
+                                && metronome
+                                && (play_frame as f64 / sample_rate as f64)
+                                    % (1.0 / self.beats_per_second)
+                                    < 0.01
+                            {
+                                *sample += 0.3;
+                            }
+
                             play_sample += 1;
+
                             play_frame = play_sample / channels;
 
                             let beat = (play_frame as f64 / sample_rate as f64
@@ -326,7 +368,7 @@ impl AudioEngine {
                                     .submit_command(
                                         ARRANGEMENT_UPDATE_PLAY_LINE,
                                         play_frame as f64 / sample_rate as f64,
-                                        Target::Global,
+                                        Target::Widget(crate::ARRANGEMENT_WIDGET_ID),
                                     )
                                     .unwrap();
                             }

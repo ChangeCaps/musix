@@ -44,13 +44,14 @@ impl Widget<AppState> for ArrangementWidget {
             Event::Wheel(mouse_event) => {
                 let scroll_speed = env.get(settings::ARRANGEMENT_SCROLL_SPEED);
 
-                if mouse_event.mods.ctrl {
+                if mouse_event.mods.shift {
                     self.scroll.y += mouse_event.wheel_delta.y * scroll_speed;
 
                     self.scroll.y = self
                         .scroll
                         .y
                         .max(-env.get(settings::ARRANGEMENT_TRACK_HEIGHT) / 2.0);
+                } else if mouse_event.mods.ctrl {
                 } else {
                     self.scroll.x += mouse_event.wheel_delta.y * scroll_speed;
 
@@ -67,7 +68,10 @@ impl Widget<AppState> for ArrangementWidget {
 
                 self.play_line = time;
                 ctx.submit_command(
-                    Command::new(commands::AUDIO_ENGINE_SET_PLAY_TIME, time),
+                    Command::new(
+                        commands::AUDIO_ENGINE_SET_PLAY_TIME,
+                        time / env.get(settings::ARRANGEMENT_BEATS_PER_SECOND),
+                    ),
                     Target::Global,
                 );
                 ctx.request_paint();
@@ -217,10 +221,17 @@ impl Widget<AppState> for TrackWidget {
 
         match event {
             Event::MouseDown(mouse_event) if mouse_event.button.is_left() => {
-                let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
-                let beat = (mouse_event.pos.x / beat_size).round() as usize;
+                if mouse_event.mods.shift {
+                    let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
+                    let beat = (mouse_event.pos.x / beat_size).round() as usize;
 
-                self.selection = track.get_selection(beat);
+                    Arc::make_mut(&mut data.arrangement.tracks)[self.idx].remove_block(beat);
+                } else {
+                    let beat_size = env.get(settings::ARRANGEMENT_BEAT_SIZE);
+                    let beat = (mouse_event.pos.x / beat_size).round() as usize;
+
+                    self.selection = track.get_selection(beat);
+                }
             }
 
             Event::Command(cmd) if cmd.is(commands::GLOBAL_MOUSE_UP) => {
@@ -310,7 +321,11 @@ impl Widget<AppState> for TrackWidget {
         while place < ctx.size().width {
             let beat = (place / beat_size).floor() as usize;
             let block = track.get_block(beat);
-            let prev_block = if beat > 0 { track.get_block(beat - 1) } else { None };
+            let prev_block = if beat > 0 {
+                track.get_block(beat - 1)
+            } else {
+                None
+            };
             let audio_block = block.map(|b| &data.audio_blocks[&b.audio_block_id]);
             let prev_audio_block = prev_block.map(|b| &data.audio_blocks[&b.audio_block_id]);
 

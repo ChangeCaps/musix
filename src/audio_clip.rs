@@ -1,5 +1,5 @@
-use crate::audio::*;
-use druid::*;
+use crate::{audio::*, widgets};
+use druid::{widget::*, *};
 use std::sync::Arc;
 
 #[derive(Clone, Data)]
@@ -43,8 +43,7 @@ impl AudioSource for AudioClip {
         self.samples
             .get(
                 ((frame as f64 * self.format.channels as f64 + channel as f64)
-                    * self.format.beats_per_second
-                    / beats_per_second)
+                    * (beats_per_second / self.format.beats_per_second))
                     .round() as usize,
             )
             .map(|x| *x)
@@ -54,20 +53,25 @@ impl AudioSource for AudioClip {
         self.format.clone()
     }
 
-    fn widget(&self) -> Box<dyn druid::Widget<Arc<dyn AudioSource>>> {
-        Box::new(druid::widget::Flex::row().lens(lens::Map::new(
-            |data: &Arc<dyn AudioSource>| {
-                // this is hell, but im also kinda proud of the solution, fuck me, why didn't i
-                // just use a god dammed enum
-                if (**data).type_id() == std::any::TypeId::of::<AudioClip>() {
-                    unsafe { &*(&**data as *const dyn AudioSource as *const Self) }.clone()
-                } else {
-                    panic!("yeet");
-                }
-            },
-            |data, val| {
-                *data = Arc::new(val);
-            },
-        )))
+    fn widget(&self) -> Box<dyn druid::Widget<(Arc<dyn AudioSource>, crate::AudioBlock)>> {
+        Box::new(
+            druid::widget::Flex::row()
+                .with_flex_child(widgets::audio_clip_editor::AudioClipEditor::new(), 1.0)
+                .lens(lens::Map::new(
+                    |data: &(Arc<dyn AudioSource>, crate::AudioBlock)| {
+                        // this is hell, but im also kinda proud of the solution, fuck me, why didn't i
+                        // just use a god dammed enum
+                        if (*data.0).type_id() == std::any::TypeId::of::<AudioClip>() {
+                            (unsafe { &*(&*data.0 as *const dyn AudioSource as *const Self) }.clone(), data.1.clone())
+                        } else {
+                            panic!("yeet");
+                        }
+                    },
+                    |data, val| {
+                        data.0 = Arc::new(val.0);
+                        data.1 = val.1;
+                    },
+                )),
+        )
     }
 }

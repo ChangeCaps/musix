@@ -1,7 +1,7 @@
 use crate::{
     audio::{AudioSourceFormat, AudioSourceID},
     widgets::arrangement::*,
-    AudioBlockID, AudioBlock,
+    AudioBlock, AudioBlockID,
 };
 use druid::*;
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -28,7 +28,16 @@ impl Arrangement {
         Arc::make_mut(&mut self.tracks).remove(idx);
     }
 
-    pub fn compile_index(&self, audio_blocks: &HashMap<AudioBlockID, AudioBlock>) -> ArrangementAudioSourceIndex {
+    pub fn remove_audio_block(&mut self, audio_block_id: AudioBlockID) {
+        for track in Arc::make_mut(&mut self.tracks) {
+            track.remove_by_audio_block_id(audio_block_id);
+        }
+    }
+
+    pub fn compile_index(
+        &self,
+        audio_blocks: &HashMap<AudioBlockID, AudioBlock>,
+    ) -> ArrangementAudioSourceIndex {
         let mut arrangement_index = ArrangementAudioSourceIndex::default();
 
         for track in &*self.tracks {
@@ -53,9 +62,18 @@ impl Track {
         Self::default()
     }
 
+    pub fn remove_by_audio_block_id(&mut self, block_id: AudioBlockID) {
+        self.blocks.retain(|block| block.audio_block_id != block_id);
+        self.calculate_beats();
+    }
+
     pub fn get_selection(&self, beat: usize) -> Option<Selection> {
         let selected = self.beats.get(&beat);
-        let prev_selected = if beat > 0 { self.beats.get(&(beat - 1)) } else { None };
+        let prev_selected = if beat > 0 {
+            self.beats.get(&(beat - 1))
+        } else {
+            None
+        };
         if selected.is_some() && self.blocks[*selected.unwrap()].bounds.start == beat {
             Some(Selection::Some(beat, *selected.unwrap()))
         } else if prev_selected.is_some() && self.blocks[*prev_selected.unwrap()].bounds.end == beat
@@ -164,34 +182,55 @@ impl Track {
         }
     }
 
-    pub fn compile_index(&self, arrangement_index: &mut ArrangementAudioSourceIndex, audio_blocks: &HashMap<AudioBlockID, AudioBlock>) {
+    pub fn remove_block(&mut self, beat: usize) -> bool {
+        if let Some(block_index) = self.beats.get(&beat) {
+            self.blocks.remove(*block_index);
+            self.calculate_beats();
+
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn compile_index(
+        &self,
+        arrangement_index: &mut ArrangementAudioSourceIndex,
+        audio_blocks: &HashMap<AudioBlockID, AudioBlock>,
+    ) {
         for block in &self.blocks {
             let audio_block = &audio_blocks[&block.audio_block_id];
 
-            for play_cycle in 0..(block.bounds.end - block.bounds.start) / audio_block.len_beats {
+            for play_cycle in 0..(block.bounds.end - block.bounds.start).saturating_sub(1)
+                / audio_block.len_beats
+                + 1
+            {
                 for relative_beat in 0..audio_block.true_len_beats {
                     let cycle_offset = play_cycle * audio_block.len_beats;
 
                     let beat = block.bounds.start + relative_beat + cycle_offset;
-                    
+
                     let audio_source_index = AudioSourceIndex {
                         audio_source_id: audio_block.audio_id,
-                        beats_offset: relative_beat as f32,
+                        beats_offset: relative_beat as f32 + audio_block.offset,
                     };
 
-                    arrangement_index.beats.entry(beat).or_insert(Vec::new()).push(audio_source_index);
+                    arrangement_index
+                        .beats
+                        .entry(beat)
+                        .or_insert(Vec::new())
+                        .push(audio_source_index);
                 }
             }
         }
     }
 }
 
-
 /// Block describe which audiosources should be played when.
 /// It contains an [`AudioBlockID`] pointing to an [`AudioBlock`] describing the visual characteristics of the block.
-/// 
+///
 /// The Block contains a [`Range`] called bounds, which describes which beats the [`AudioSource`] should be played on.
-/// 
+///
 /// bounds: 2..4
 /// | | | |
 /// | *-* |
