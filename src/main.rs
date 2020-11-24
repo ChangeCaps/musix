@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 
 mod arrangement;
 mod audio;
+mod audio_clip;
 mod deligate;
 mod widgets;
 
