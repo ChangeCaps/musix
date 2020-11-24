@@ -1,5 +1,6 @@
 use crate::commands;
 use druid::*;
+use std::sync::Arc;
 
 pub struct Deligate {}
 
@@ -48,6 +49,12 @@ impl druid::AppDelegate<crate::AppState> for Deligate {
                 let id = cmd.get_unchecked(commands::SELECT_AUDIO_BLOCK);
 
                 data.selected_audio_block = Some(*id);
+                let audio_blocks = &data.audio_blocks[id];
+
+                data.selected_audio_source_clone = Some(
+                    data.audio_engine_handle
+                        .get_audio_source_clone(audio_blocks.audio_id),
+                );
 
                 false
             }

@@ -89,7 +89,8 @@ impl AudioBlock {
         format: audio::AudioSourceFormat,
         beats_per_second: f64,
     ) -> Self {
-        let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64 * beats_per_second)
+        let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64
+            * beats_per_second)
             .ceil() as usize;
 
         Self {
@@ -109,11 +110,13 @@ pub struct AppState {
     pub shown_audio_blocks: Arc<Vec<AudioBlockID>>,
     pub listed_audio_blocks: Arc<Vec<AudioBlockID>>,
     pub selected_audio_block: Option<AudioBlockID>,
+    pub selected_audio_source_clone: Option<Arc<dyn audio::AudioSource>>,
     pub next_audio_block_id: AudioBlockID,
     pub playing: bool,
     pub recording: bool,
     pub feedback: bool,
     pub audio_engine_handle: audio::AudioEngineHandle,
+    pub volume: f64,
 }
 
 fn create_block_list() -> impl Widget<AppState> {
@@ -147,8 +150,8 @@ fn create_block_list() -> impl Widget<AppState> {
     ))
 }
 
-fn create_block_menu(selected: AudioBlockID) -> Box<impl Widget<AppState>> {
-    const NUM_COLORS: u32 = 20;
+fn create_block_menu(selected: AudioBlockID) -> impl Widget<AppState> {
+    const NUM_COLORS: u32 = 30;
 
     let mut block_color_pick = Flex::column();
 
@@ -170,22 +173,17 @@ fn create_block_menu(selected: AudioBlockID) -> Box<impl Widget<AppState>> {
         block_color_pick.add_spacer(2.0);
     }
 
-    Box::new(
-        Flex::row()
-            .with_child(
-                Scroll::new(block_color_pick)
-                    .vertical()
-                    .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
-                    .rounded(5.0),
-            )
-            .align_left()
-            .lens(AppState::audio_blocks.map(
-                move |data: &Arc<HashMap<AudioBlockID, AudioBlock>>| data[&selected].clone(),
-                move |data, val| {
-                    Arc::make_mut(data).insert(selected, val);
-                },
-            )),
-    )
+    Scroll::new(block_color_pick)
+        .vertical()
+        .border(theme::BORDER_COLOR, theme::BORDER_WIDTH)
+        .rounded(5.0)
+        .align_left()
+        .lens(AppState::audio_blocks.map(
+            move |data: &Arc<HashMap<AudioBlockID, AudioBlock>>| data[&selected].clone(),
+            move |data, val| {
+                Arc::make_mut(data).insert(selected, val);
+            },
+        ))
 }
 
 fn create_top_bar() -> impl Widget<AppState> {
@@ -222,9 +220,11 @@ fn create_top_bar() -> impl Widget<AppState> {
                                 data.playing = true;
                                 data.audio_engine_handle.set_playing(true);
 
-                                let arrangement_index = data.arrangement.compile_index(&data.audio_blocks);
+                                let arrangement_index =
+                                    data.arrangement.compile_index(&data.audio_blocks);
 
-                                data.audio_engine_handle.set_arrangement_index(arrangement_index);
+                                data.audio_engine_handle
+                                    .set_arrangement_index(arrangement_index);
                             },
                         ))
                         .with_child(Button::new("Record").on_click(
@@ -246,6 +246,15 @@ fn create_top_bar() -> impl Widget<AppState> {
                 data.audio_engine_handle.set_feedback(data.feedback);
             },
         )))
+        .with_spacer(15.0)
+        .with_child(Label::new("Volume"))
+        .with_child(Slider::new().lens(lens::Map::new(
+            |data: &AppState| data.volume,
+            |data, val| {
+                data.volume = val;
+                data.audio_engine_handle.set_volume(data.volume);
+            },
+        )))
         .align_left()
 }
 
@@ -258,8 +267,28 @@ fn create_menu() -> impl druid::Widget<AppState> {
                     .with_flex_child(
                         ViewSwitcher::new(
                             |data: &AppState, _| data.selected_audio_block,
-                            |selector, _, _| match selector {
-                                Some(selected) => create_block_menu(*selected),
+                            |selector, data, _| match selector {
+                                Some(selected) => {
+                                    let mut row =
+                                        Flex::row().with_child(create_block_menu(*selected));
+
+                                    if let Some(source) = &data.selected_audio_source_clone {
+                                        row.add_flex_child(
+                                            source.widget().lens(
+                                                AppState::selected_audio_source_clone
+                                                    .then(lens::Field::new(
+                                                    |data: &Option<Arc<dyn audio::AudioSource>>| {
+                                                        data.as_ref().unwrap()
+                                                    },
+                                                    |data| data.as_mut().unwrap(),
+                                                )),
+                                            ),
+                                            1.0,
+                                        );
+                                    }
+
+                                    Box::new(row)
+                                }
                                 None => Box::new(Flex::row().align_left()),
                             },
                         )
@@ -333,11 +362,13 @@ fn main() {
         shown_audio_blocks: Arc::new(Vec::new()),
         listed_audio_blocks: Arc::new(Vec::new()),
         selected_audio_block: None,
+        selected_audio_source_clone: None,
         next_audio_block_id: AudioBlockID(0),
         playing: false,
         recording: false,
         feedback: true,
         audio_engine_handle,
+        volume: 0.5,
     };
 
     launcher.launch(app_data).expect("launch failed");

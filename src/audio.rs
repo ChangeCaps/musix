@@ -1,10 +1,14 @@
-use crate::{commands::*, arrangement::*};
+use crate::{arrangement::*, commands::*};
 use cpal::traits::*;
-use druid::Target;
+use druid::{Target, *};
 use log::*;
 use std::{
+    any::Any,
     collections::HashMap,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, druid::Data)]
@@ -16,11 +20,14 @@ pub enum Command {
     SetPlayTime(f64),
     SetFeedback(bool),
     SetBeatsPerSecond(f64),
+    SetVolume(f64),
+    GetAudioSourceClone(AudioSourceID),
     SetArrangementAudioSourceIndex(ArrangementAudioSourceIndex),
 }
 
 pub enum CommandResponse {
     SetRecording(Option<(AudioSourceID, AudioSourceFormat)>),
+    GetAudioSourceClone(Arc<dyn AudioSource + Send + Sync>),
 }
 
 #[derive(Clone, druid::Data)]
@@ -47,6 +54,7 @@ impl AudioEngineHandle {
 
         match self.receiver.recv().unwrap() {
             CommandResponse::SetRecording(v) => v,
+            CommandResponse::GetAudioSourceClone(_) => panic!("wrong response wtf"),
         }
     }
 
@@ -54,8 +62,25 @@ impl AudioEngineHandle {
         self.sender.send(Command::SetFeedback(val)).unwrap();
     }
 
+    pub fn set_volume(&self, volume: f64) {
+        self.sender.send(Command::SetVolume(volume)).unwrap();
+    }
+
+    pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> Arc<dyn AudioSource> {
+        self.sender
+            .send(Command::GetAudioSourceClone(audio_source_id))
+            .unwrap();
+
+        match self.receiver.recv().unwrap() {
+            CommandResponse::SetRecording(_) => panic!("wrong response wtf"),
+            CommandResponse::GetAudioSourceClone(v) => v,
+        }
+    }
+
     pub fn set_arrangement_index(&self, index: ArrangementAudioSourceIndex) {
-        self.sender.send(Command::SetArrangementAudioSourceIndex(index)).unwrap();
+        self.sender
+            .send(Command::SetArrangementAudioSourceIndex(index))
+            .unwrap();
     }
 }
 
@@ -67,67 +92,93 @@ pub struct AudioSourceFormat {
     pub beats_per_second: f64,
 }
 
-pub trait AudioSource {
+pub trait AudioSource: AudioSourceClone + Any {
     fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32>;
-    fn length_secs(&self) -> f64;
     fn format(&self) -> AudioSourceFormat;
+
+    /// This is type specification hell, please don't replicate, at all, please
+    fn widget(&self) -> Box<dyn druid::Widget<Arc<dyn AudioSource>>>;
+
+    fn len_seconds(&self) -> f64 {
+        let format = self.format();
+
+        format.len_frames as f64 / format.sample_rate as f64
+    }
 }
 
+pub trait AudioSourceClone {
+    fn arc_clone(&self) -> Arc<dyn AudioSource + Send + Sync + 'static>;
+}
+
+impl<T: AudioSource + Send + Sync + Clone + 'static> AudioSourceClone for T {
+    fn arc_clone(&self) -> Arc<dyn AudioSource + Send + Sync + 'static> {
+        Arc::new(self.clone())
+    }
+}
+
+#[derive(Clone, Data)]
 pub struct AudioClip {
-    sample_rate: u32,
-    len_frames: u32,
-    channels: u32,
-    samples: Vec<f32>,
-    beats_per_second: f64,
+    format: AudioSourceFormat,
+    samples: Arc<Vec<f32>>,
 }
 
 impl AudioClip {
-    pub fn new(sample_rate: u32, channels: u32, samples: Vec<f32>, beats_per_second: f64) -> Self {
+    pub fn new(samples: Vec<f32>, format: AudioSourceFormat) -> Self {
         Self {
-            sample_rate,
-            len_frames: samples.len() as u32 / channels,
-            channels,
-            samples,
-            beats_per_second,
+            format,
+            samples: Arc::new(samples),
         }
     }
 
-    pub fn empty(sample_rate: u32, channels: u32, beats_per_second: f64) -> Self {
+    pub fn empty(format: AudioSourceFormat) -> Self {
         Self {
-            sample_rate,
-            channels,
-            len_frames: 0,
-            samples: Vec::new(),
-            beats_per_second,
+            format,
+            samples: Arc::new(Vec::new()),
         }
     }
 
     pub fn append_sample(&mut self, sample: f32) {
-        self.samples.push(sample);
-        self.len_frames = self.samples.len() as u32 / self.channels;
+        Arc::make_mut(&mut self.samples).push(sample);
+        self.format.len_frames = self.samples.len() as u32 / self.format.channels;
     }
 
     pub fn clean(&mut self) {
-        self.samples.truncate(self.samples.len() - self.samples.len() % self.channels as usize);
+        let len = self.samples.len();
+        Arc::make_mut(&mut self.samples).truncate(len - len % self.format.channels as usize);
     }
 }
 
 impl AudioSource for AudioClip {
     fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32> {
-        self.samples.get(((frame as f64 * self.channels as f64 + channel as f64) * self.beats_per_second / beats_per_second).round() as usize).map(|x| *x)
-    }
-
-    fn length_secs(&self) -> f64 {
-        self.len_frames as f64 / self.sample_rate as f64
+        self.samples
+            .get(
+                ((frame as f64 * self.format.channels as f64 + channel as f64)
+                    * self.format.beats_per_second
+                    / beats_per_second)
+                    .round() as usize,
+            )
+            .map(|x| *x)
     }
 
     fn format(&self) -> AudioSourceFormat {
-        AudioSourceFormat {
-            sample_rate: self.sample_rate,
-            len_frames: self.len_frames,
-            channels: self.channels,
-            beats_per_second: self.beats_per_second,
-        }
+        self.format.clone()
+    }
+
+    fn widget(&self) -> Box<dyn druid::Widget<Arc<dyn AudioSource>>> {
+        Box::new(druid::widget::Flex::row().lens(lens::Map::new(
+            |data: &Arc<dyn AudioSource>| {
+                // this is hell, but im also kinda proud of the solution, fuck me, why didn't i
+                // just use a god dammed enum
+                if (**data).type_id() == std::any::TypeId::of::<AudioClip>() {
+                    unsafe { &*(&**data as *const dyn AudioSource as *const Self) }.clone()
+                } else {
+                    panic!("yeet");
+                }
+            },
+            |data, val| {
+                *data = Arc::new(val);
+            },
+        )))
     }
 }
 
@@ -138,7 +189,7 @@ pub struct AudioEngine {
     volume: f64,
     beats_per_second: f64,
     feedback: bool,
-    sources: HashMap<AudioSourceID, Box<dyn AudioSource + Send + Sync>>,
+    sources: HashMap<AudioSourceID, Box<dyn AudioSource + Send + Sync + 'static>>,
     next_audio_id: AudioSourceID,
 }
 
@@ -207,7 +258,6 @@ impl AudioEngine {
             let mut play_sample: u32 = 0;
             let mut play_frame: u32 = 0;
             let mut playing = false;
-            let mut volume = self.volume;
             let mut recording_clip: Option<AudioClip> = None;
             let mut arrangement_index = ArrangementAudioSourceIndex::default();
 
@@ -235,7 +285,12 @@ impl AudioEngine {
                                 Command::SetRecording(val) => {
                                     if val {
                                         recording_clip =
-                                            Some(AudioClip::empty(sample_rate, channels, self.beats_per_second));
+                                            Some(AudioClip::empty(AudioSourceFormat {
+                                                sample_rate,
+                                                channels,
+                                                len_frames: 0,
+                                                beats_per_second: self.beats_per_second,
+                                            }));
                                     } else {
                                         if let Some(mut recording_clip) =
                                             std::mem::replace(&mut recording_clip, None)
@@ -267,14 +322,24 @@ impl AudioEngine {
                                 }
                                 Command::SetBeatsPerSecond(bps) => self.beats_per_second = bps,
                                 Command::SetFeedback(feedback) => self.feedback = feedback,
-                                Command::SetArrangementAudioSourceIndex(index) => arrangement_index = index,
+                                Command::SetVolume(volume) => self.volume = volume,
+                                Command::GetAudioSourceClone(audio_source_id) => {
+                                    self.sender
+                                        .send(CommandResponse::GetAudioSourceClone(
+                                            self.sources[&audio_source_id].arc_clone(),
+                                        ))
+                                        .unwrap();
+                                }
+                                Command::SetArrangementAudioSourceIndex(index) => {
+                                    arrangement_index = index
+                                }
                             }
                         }
 
                         match consumer.pop() {
                             Some(s) => {
                                 if self.feedback {
-                                    *sample = s * volume as f32;
+                                    *sample = s * self.volume as f32;
                                 } else {
                                     *sample = 0.0;
                                 }
@@ -295,14 +360,28 @@ impl AudioEngine {
                             play_sample += 1;
                             play_frame = play_sample / channels;
 
-                            let beat = (play_frame as f64 / sample_rate as f64 * self.beats_per_second).floor() as u32;
-                            let beat_frame = play_frame % (sample_rate as f64 / self.beats_per_second).floor() as u32;
+                            let beat = (play_frame as f64 / sample_rate as f64
+                                * self.beats_per_second)
+                                .floor() as u32;
+                            let beat_frame = play_frame
+                                % (sample_rate as f64 / self.beats_per_second).floor() as u32;
 
-                            if let Some(source_indices) = arrangement_index.beats.get(&(beat as usize)) {
+                            if let Some(source_indices) =
+                                arrangement_index.beats.get(&(beat as usize))
+                            {
                                 for source_index in source_indices {
-                                    let offset = (source_index.beats_offset as f64 * sample_rate as f64 / self.beats_per_second) as u32;
+                                    let offset = (source_index.beats_offset as f64
+                                        * sample_rate as f64
+                                        / self.beats_per_second)
+                                        as u32;
 
-                                    if let Some(source_sample) = self.sources[&source_index.audio_source_id].get_sample(beat_frame + offset, channel, self.beats_per_second) {
+                                    if let Some(source_sample) =
+                                        self.sources[&source_index.audio_source_id].get_sample(
+                                            beat_frame + offset,
+                                            channel,
+                                            self.beats_per_second,
+                                        )
+                                    {
                                         *sample += source_sample;
                                     }
                                 }
