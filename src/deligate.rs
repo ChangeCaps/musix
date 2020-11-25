@@ -59,6 +59,21 @@ impl druid::AppDelegate<crate::AppState> for Deligate {
                 false
             }
 
+            _ if cmd.is(commands::REMOVE_AUDIO_BLOCK) => {
+                let id = cmd.get_unchecked(commands::REMOVE_AUDIO_BLOCK);
+
+                if data.selected_audio_block == Some(*id) {
+                    data.selected_audio_block = None;
+                    data.selected_audio_source_clone = None;
+                }
+
+                Arc::make_mut(&mut data.shown_audio_blocks).retain(|x| x != id);
+                Arc::make_mut(&mut data.audio_blocks).remove(id);
+                data.arrangement.remove_audio_block(*id);
+
+                false
+            }
+
             _ => true,
         }
     }
