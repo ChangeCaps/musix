@@ -212,7 +212,7 @@ impl Track {
 
                     let audio_source_index = AudioSourceIndex {
                         audio_source_id: audio_block.audio_id,
-                        beats_offset: relative_beat as f32 + audio_block.offset,
+                        beats_offset: relative_beat as f32 - audio_block.offset,
                     };
 
                     arrangement_index

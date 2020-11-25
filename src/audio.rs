@@ -349,11 +349,15 @@ impl AudioEngine {
                                     let offset = (source_index.beats_offset as f64
                                         * sample_rate as f64
                                         / self.beats_per_second)
-                                        as u32;
+                                        as i64;
+
+                                    if beat_frame as i64 + offset < 0 {
+                                        continue;
+                                    }
 
                                     if let Some(source_sample) =
                                         self.sources[&source_index.audio_source_id].get_sample(
-                                            beat_frame + offset,
+                                            beat_frame + offset as u32,
                                             channel,
                                             self.beats_per_second,
                                         )

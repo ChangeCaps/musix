@@ -4,6 +4,7 @@ use druid::*;
 pub struct AudioClipEditor {
     scroll: f64,
     selected: bool,
+    prev_mouse_pos: Point,
 }
 
 impl AudioClipEditor {
@@ -11,6 +12,7 @@ impl AudioClipEditor {
         Self {
             scroll: 0.5,
             selected: false,
+            prev_mouse_pos: Point::new(0.0, 0.0),
         }
     }
 }
@@ -43,7 +45,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
                 Event::MouseDown(mouse_event) if mouse_event.button.is_left() => {
                     let format = audio_clip.format();
                     let beat_size =
-                        env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / 4.0 * format.beats_per_second;
+                        env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / format.beats_per_second;
 
                     self.selected = (mouse_event.pos.x / beat_size).round() as i32
                         == audio_block.len_beats as i32;
@@ -54,12 +56,15 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
                 }
 
                 Event::MouseMove(mouse_event) => {
+                    let mouse_delta = mouse_event.pos - self.prev_mouse_pos;
+                    let format = audio_clip.format();
+                    
+
                     if mouse_event.buttons.has_right() {
-                        audio_block.offset = mouse_event.pos.x as f32;
+                        audio_block.offset += mouse_delta.x as f32 / env.get(theme::AUDIO_CLIP_EDITOR_SCALE) as f32 * format.beats_per_second as f32;
                     } else if self.selected {
-                        let format = audio_clip.format();
                         let beat_size =
-                            env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / 4.0 * format.beats_per_second;
+                            env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / format.beats_per_second;
 
                         let mut new_len_beats = (mouse_event.pos.x / beat_size).round() as i32;
 
@@ -68,6 +73,8 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
 
                         audio_block.len_beats = new_len_beats as usize;
                     }
+
+                    self.prev_mouse_pos = mouse_event.pos;
                 }
 
                 _ => (),
@@ -122,7 +129,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
             ctx.transform(Affine::translate(Vec2::new(scroll_offset, 0.0)));
 
             // draw beat lines
-            let beat_size = env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / 4.0 * format.beats_per_second;
+            let beat_size = env.get(theme::AUDIO_CLIP_EDITOR_SCALE) / format.beats_per_second;
             let beat_line_width = env.get(theme::ARRANGEMENT_BEAT_LINE_WIDTH);
             let starting_beat = (-scroll_offset / beat_size).floor() * beat_size;
             let starting_beat_num = (starting_beat / beat_size) as i32;
@@ -149,9 +156,11 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
             }
 
             // draw the clip visulaization
+            let scale = env.get(theme::AUDIO_CLIP_EDITOR_SCALE);
+
             let num_bars = (audio_clip.len_seconds() / env.get(theme::AUDIO_CLIP_EDITOR_RESOLUTION))
                 .ceil() as u32;
-            let bar_width = env.get(theme::AUDIO_CLIP_EDITOR_SCALE)
+            let bar_width = scale
                 * env.get(theme::AUDIO_CLIP_EDITOR_RESOLUTION);
             let bar_frames =
                 (env.get(theme::AUDIO_CLIP_EDITOR_RESOLUTION) * format.sample_rate as f64) as u32;
@@ -163,7 +172,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
 
                 let rect = Rect::from_center_size(
                     (
-                        bar as f64 * bar_width + bar_width / 2.0 + audio_block.offset as f64,
+                        bar as f64 * bar_width + bar_width / 2.0 + audio_block.offset as f64 * scale / format.beats_per_second,
                         size.height / 2.0,
                     ),
                     (bar_width + 1.0, bar_height * 300.0),
