@@ -132,6 +132,7 @@ pub struct AppState {
     pub playing: bool,
     pub recording: bool,
     pub feedback: bool,
+    pub metronome: bool,
     pub audio_engine_handle: audio::AudioEngineHandle,
     pub volume: f64,
     pub beats_per_minute: f64,
@@ -326,6 +327,14 @@ fn create_top_bar() -> impl Widget<AppState> {
                 ))
                 .fix_width(35.0),
         )
+        .with_spacer(15.0)
+        .with_child(Checkbox::new("Metronome").lens(lens::Map::new(
+            |data: &AppState| data.metronome,
+            |data, val| {
+                data.metronome = val;
+                data.audio_engine_handle.set_metronome(val);
+            },
+        )))
         .align_left()
 }
 
@@ -457,6 +466,7 @@ fn main() {
         playing: false,
         recording: false,
         feedback: true,
+        metronome: true,
         audio_engine_handle,
         volume: 2.5,
         beats_per_minute: 120.0,

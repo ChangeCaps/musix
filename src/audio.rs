@@ -21,6 +21,7 @@ pub enum Command {
     SetFeedback(bool),
     SetBeatsPerSecond(f64),
     SetVolume(f64),
+    SetMetronome(bool),
     RemoveAudioSource(AudioSourceID),
     GetAudioSourceClone(AudioSourceID),
     SetArrangementAudioSourceIndex(ArrangementAudioSourceIndex),
@@ -71,6 +72,10 @@ impl AudioEngineHandle {
         self.sender
             .send(Command::SetBeatsPerSecond(beats_per_second))
             .unwrap();
+    }
+
+    pub fn set_metronome(&self, metronome: bool) {
+        self.sender.send(Command::SetMetronome(metronome)).unwrap();
     }
 
     pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> Arc<dyn AudioSource> {
@@ -203,6 +208,7 @@ impl AudioEngine {
             let mut wait_for_input = true;
             let mut waiting_for_input = false;
             let mut playing = false;
+            let mut recording = false;
             let mut recording_clip: Option<AudioClip> = None;
             let mut arrangement_index = ArrangementAudioSourceIndex::default();
 
@@ -226,7 +232,10 @@ impl AudioEngine {
                     for sample in data {
                         if let Ok(cmd) = self.receiver.try_recv() {
                             match cmd {
-                                Command::SetPlaying(val) => playing = val,
+                                Command::SetPlaying(val) => {
+                                    playing = val;
+                                    recording &= val;
+                                }
                                 Command::SetRecording(val) => {
                                     if val {
                                         recording_clip =
@@ -242,7 +251,10 @@ impl AudioEngine {
                                         }
 
                                         playing = true;
+                                        recording = true;
                                     } else {
+                                        recording = false;
+
                                         if let Some(mut recording_clip) =
                                             std::mem::replace(&mut recording_clip, None)
                                         {
@@ -274,6 +286,7 @@ impl AudioEngine {
                                 Command::SetBeatsPerSecond(bps) => self.beats_per_second = bps,
                                 Command::SetFeedback(feedback) => self.feedback = feedback,
                                 Command::SetVolume(volume) => self.volume = volume,
+                                Command::SetMetronome(m) => metronome = m,
                                 Command::RemoveAudioSource(audio_source_id) => {
                                     self.sources.remove(&audio_source_id);
                                 }
@@ -323,7 +336,7 @@ impl AudioEngine {
                         }
 
                         if playing {
-                            if recording_clip.is_some()
+                            if recording
                                 && metronome
                                 && (play_frame as f64 / sample_rate as f64)
                                     % (1.0 / self.beats_per_second)

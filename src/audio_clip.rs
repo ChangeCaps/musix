@@ -62,7 +62,11 @@ impl AudioSource for AudioClip {
                         // this is hell, but im also kinda proud of the solution, fuck me, why didn't i
                         // just use a god dammed enum
                         if (*data.0).type_id() == std::any::TypeId::of::<AudioClip>() {
-                            (unsafe { &*(&*data.0 as *const dyn AudioSource as *const Self) }.clone(), data.1.clone())
+                            (
+                                unsafe { &*(&*data.0 as *const dyn AudioSource as *const Self) }
+                                    .clone(),
+                                data.1.clone(),
+                            )
                         } else {
                             panic!("yeet");
                         }
