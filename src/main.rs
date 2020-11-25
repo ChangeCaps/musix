@@ -302,6 +302,7 @@ fn create_top_bar() -> impl Widget<AppState> {
             },
         )))
         .with_spacer(15.0)
+        .with_child(Label::new("bpm"))
         .with_child(
             TextBox::new()
                 .with_placeholder("0")
@@ -325,7 +326,6 @@ fn create_top_bar() -> impl Widget<AppState> {
                 ))
                 .fix_width(35.0),
         )
-        .with_child(Label::new("bpm"))
         .align_left()
 }
 
