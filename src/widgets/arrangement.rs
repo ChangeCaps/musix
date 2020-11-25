@@ -236,6 +236,7 @@ impl Widget<AppState> for TrackWidget {
 
             Event::Command(cmd) if cmd.is(commands::GLOBAL_MOUSE_UP) => {
                 self.selection = None;
+                ctx.submit_command(commands::GLOBAL_LOG_HISTORY, Target::Global);
             }
 
             Event::MouseDown(mouse_event) if mouse_event.button.is_right() => {

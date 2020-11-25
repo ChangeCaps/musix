@@ -51,8 +51,9 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
                         == audio_block.len_beats as i32;
                 }
 
-                Event::MouseUp(mouse_event) if mouse_event.button.is_left() => {
+                Event::Command(cmd) if cmd.is(crate::commands::GLOBAL_MOUSE_UP) => {
                     self.selected = false;
+                    ctx.submit_command(crate::commands::GLOBAL_LOG_HISTORY, Target::Global);
                 }
 
                 Event::MouseMove(mouse_event) => {

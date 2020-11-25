@@ -31,6 +31,8 @@ mod commands {
     pub const ARRANGEMENT_REMOVE_TRACK: Selector<usize> = Selector::new("arrangement.remove-track");
     pub const ARRANGEMENT_UPDATE_PLAY_LINE: Selector<f64> =
         Selector::new("arrangement.update-play-line");
+
+    pub const GLOBAL_LOG_HISTORY: Selector<()> = Selector::new("global.log-history");
 }
 
 mod settings {
@@ -412,7 +414,7 @@ struct GlobalController;
 impl<T, W: Widget<T>> Controller<T, W> for GlobalController {
     fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
         match event {
-            Event::MouseUp(mouse_event) => {
+            Event::MouseUp(mouse_event) if mouse_event.button.is_left() || mouse_event.button.is_right() => {
                 ctx.submit_command(
                     Command::new(commands::GLOBAL_MOUSE_UP, mouse_event.clone()),
                     None,
