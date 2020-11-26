@@ -1,9 +1,8 @@
-use crate::{arrangement::*, audio_clip::AudioClip, commands::*};
+use crate::{arrangement::*, audio_clip::AudioClip, audio_source::AudioSource, commands::*};
 use cpal::traits::*;
 use druid::Target;
 use log::*;
 use std::{
-    any::Any,
     collections::HashMap,
     sync::{
         mpsc::{channel, Receiver, Sender},
@@ -29,7 +28,7 @@ pub enum Command {
 
 pub enum CommandResponse {
     SetRecording(Option<(AudioSourceID, AudioSourceFormat)>),
-    GetAudioSourceClone(Arc<dyn AudioSource + Send + Sync>),
+    GetAudioSourceClone(AudioSource),
 }
 
 #[derive(Clone, druid::Data)]
@@ -78,7 +77,7 @@ impl AudioEngineHandle {
         self.sender.send(Command::SetMetronome(metronome)).unwrap();
     }
 
-    pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> Arc<dyn AudioSource> {
+    pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> AudioSource {
         self.sender
             .send(Command::GetAudioSourceClone(audio_source_id))
             .unwrap();
@@ -104,29 +103,6 @@ pub struct AudioSourceFormat {
     pub beats_per_second: f64,
 }
 
-pub trait AudioSource: AudioSourceClone + Any {
-    fn get_sample(&self, frame: u32, channel: u32, beats_per_second: f64) -> Option<f32>;
-    fn format(&self) -> AudioSourceFormat;
-
-    fn widget(&self) -> Box<dyn druid::Widget<(Arc<dyn AudioSource>, crate::AudioBlock)>>;
-
-    fn len_seconds(&self) -> f64 {
-        let format = self.format();
-
-        format.len_frames as f64 / format.sample_rate as f64
-    }
-}
-
-pub trait AudioSourceClone {
-    fn arc_clone(&self) -> Arc<dyn AudioSource + Send + Sync + 'static>;
-}
-
-impl<T: AudioSource + Send + Sync + Clone + 'static> AudioSourceClone for T {
-    fn arc_clone(&self) -> Arc<dyn AudioSource + Send + Sync + 'static> {
-        Arc::new(self.clone())
-    }
-}
-
 pub struct AudioEngine {
     receiver: Receiver<Command>,
     sender: Sender<CommandResponse>,
@@ -134,7 +110,7 @@ pub struct AudioEngine {
     volume: f64,
     beats_per_second: f64,
     feedback: bool,
-    sources: HashMap<AudioSourceID, Box<dyn AudioSource + Send + Sync + 'static>>,
+    sources: HashMap<AudioSourceID, AudioSource>,
     next_audio_id: AudioSourceID,
 }
 
@@ -265,7 +241,8 @@ impl AudioEngine {
 
                                             let format = recording_clip.format();
 
-                                            self.sources.insert(id, Box::new(recording_clip));
+                                            self.sources
+                                                .insert(id, AudioSource::AudioClip(recording_clip));
 
                                             self.sender
                                                 .send(CommandResponse::SetRecording(Some((
@@ -293,7 +270,7 @@ impl AudioEngine {
                                 Command::GetAudioSourceClone(audio_source_id) => {
                                     self.sender
                                         .send(CommandResponse::GetAudioSourceClone(
-                                            self.sources[&audio_source_id].arc_clone(),
+                                            self.sources[&audio_source_id].clone(),
                                         ))
                                         .unwrap();
                                 }

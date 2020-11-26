@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 mod arrangement;
 mod audio;
 mod audio_clip;
+mod audio_source;
 mod controllers;
 mod deligate;
 mod widgets;
@@ -127,17 +128,35 @@ pub struct AppState {
     pub arrangement: arrangement::Arrangement,
     pub audio_blocks: Arc<HashMap<AudioBlockID, AudioBlock>>,
     pub shown_audio_blocks: Arc<Vec<AudioBlockID>>,
-    pub listed_audio_blocks: Arc<Vec<AudioBlockID>>,
-    pub selected_audio_block: Option<AudioBlockID>,
-    pub selected_audio_source_clone: Option<Arc<dyn audio::AudioSource>>,
     pub next_audio_block_id: AudioBlockID,
+    pub audio_engine_handle: audio::AudioEngineHandle,
+
+    pub selected_audio_block: Option<AudioBlockID>,
+    pub selected_audio_source_clone: Option<audio_source::AudioSource>,
+    pub beats_per_minute: f64,
     pub playing: bool,
     pub recording: bool,
     pub feedback: bool,
     pub metronome: bool,
-    pub audio_engine_handle: audio::AudioEngineHandle,
     pub volume: f64,
-    pub beats_per_minute: f64,
+}
+
+impl AppState {
+    pub fn history_changed(&self, other: &Self) -> bool {
+        !(self.arrangement.same(&other.arrangement)
+            && self.audio_blocks.same(&other.audio_blocks)
+            && self.shown_audio_blocks.same(&other.shown_audio_blocks)
+            && self.next_audio_block_id.same(&other.next_audio_block_id)
+            && self.audio_engine_handle.same(&other.audio_engine_handle))
+    }
+
+    pub fn revert(&mut self, other: Self) {
+        self.arrangement = other.arrangement;
+        self.audio_blocks = other.audio_blocks;
+        self.shown_audio_blocks = other.shown_audio_blocks;
+        self.next_audio_block_id = other.next_audio_block_id;
+        self.audio_engine_handle = other.audio_engine_handle;
+    }
 }
 
 fn create_block_list() -> impl Widget<AppState> {
@@ -355,29 +374,7 @@ fn create_menu() -> impl druid::Widget<AppState> {
                                         Flex::row().with_child(create_block_menu(*selected));
 
                                     if let Some(source) = &data.selected_audio_source_clone {
-                                        row.add_flex_child(
-                                            source.widget().lens(lens::Map::new(
-                                                move |data: &AppState| {
-                                                    (
-                                                        data.selected_audio_source_clone
-                                                            .clone()
-                                                            .unwrap(),
-                                                        data.audio_blocks
-                                                            [&data.selected_audio_block.unwrap()]
-                                                            .clone(),
-                                                    )
-                                                },
-                                                |data, val| {
-                                                    data.selected_audio_source_clone = Some(val.0);
-                                                    *Arc::make_mut(&mut data.audio_blocks)
-                                                        .get_mut(
-                                                            &data.selected_audio_block.unwrap(),
-                                                        )
-                                                        .unwrap() = val.1;
-                                                },
-                                            )),
-                                            1.0,
-                                        );
+                                        row.add_flex_child(source.editor_widget(), 1.0);
                                     }
 
                                     Box::new(row)
@@ -414,7 +411,9 @@ struct GlobalController;
 impl<T, W: Widget<T>> Controller<T, W> for GlobalController {
     fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
         match event {
-            Event::MouseUp(mouse_event) if mouse_event.button.is_left() || mouse_event.button.is_right() => {
+            Event::MouseUp(mouse_event)
+                if mouse_event.button.is_left() || mouse_event.button.is_right() =>
+            {
                 ctx.submit_command(
                     Command::new(commands::GLOBAL_MOUSE_UP, mouse_event.clone()),
                     None,
@@ -461,7 +460,6 @@ fn main() {
         arrangement: arrangement::Arrangement::new(),
         audio_blocks: Arc::new(HashMap::new()),
         shown_audio_blocks: Arc::new(Vec::new()),
-        listed_audio_blocks: Arc::new(Vec::new()),
         selected_audio_block: None,
         selected_audio_source_clone: None,
         next_audio_block_id: AudioBlockID(0),

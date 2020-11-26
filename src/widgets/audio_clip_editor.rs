@@ -1,4 +1,4 @@
-use crate::{audio::AudioSource, audio_clip::AudioClip, theme, AudioBlock};
+use crate::{audio_clip::AudioClip, theme, AudioBlock};
 use druid::*;
 
 pub struct AudioClipEditor {

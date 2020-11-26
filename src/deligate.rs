@@ -19,7 +19,7 @@ impl Default for Deligate {
 impl Deligate {
     pub fn log_history(&mut self, data: &AppState) {
         if let Some(current_data) = &self.current_data {
-            if current_data.same(data) {
+            if current_data.history_changed(data) {
                 return;
             }
         }
@@ -37,18 +37,20 @@ impl druid::AppDelegate<AppState> for Deligate {
         _window_id: WindowId,
         event: Event,
         data: &mut AppState,
-        _env: &Env
+        _env: &Env,
     ) -> Option<Event> {
         if self.current_data.is_none() {
             self.current_data = Some(data.clone());
         }
 
         match event {
-            Event::KeyDown(key_event) if key_event.key_code == KeyCode::KeyZ && key_event.mods.ctrl => {
+            Event::KeyDown(key_event)
+                if key_event.key_code == KeyCode::KeyZ && key_event.mods.ctrl =>
+            {
                 ctx.submit_command(druid::commands::UNDO, Target::Global);
             }
 
-            _ => ()
+            _ => (),
         };
 
         Some(event)
@@ -136,7 +138,7 @@ impl druid::AppDelegate<AppState> for Deligate {
                 log::info!("Undo {}", self.history.len());
 
                 if let Some(new_data) = self.history.pop() {
-                    *data = new_data;
+                    data.revert(new_data);
                     self.current_data = Some(data.clone());
                 }
 
