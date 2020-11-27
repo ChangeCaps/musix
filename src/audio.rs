@@ -14,6 +14,8 @@ use std::{
 pub struct AudioSourceID(pub usize);
 
 pub enum Command {
+    LogHistory,
+    RevertHistory(crate::deligate::HistoryID),
     SetPlaying(bool),
     SetRecording(bool),
     SetPlayTime(f64),
@@ -38,6 +40,16 @@ pub struct AudioEngineHandle {
 }
 
 impl AudioEngineHandle {
+    pub fn log_history(&self) {
+        self.sender.send(Command::LogHistory).unwrap();
+    }
+
+    pub fn revert_history(&self, history_id: crate::deligate::HistoryID) {
+        self.sender
+            .send(Command::RevertHistory(history_id))
+            .unwrap();
+    }
+
     pub fn set_playing(&self, val: bool) {
         self.sender.send(Command::SetPlaying(val)).unwrap();
     }
@@ -77,6 +89,12 @@ impl AudioEngineHandle {
         self.sender.send(Command::SetMetronome(metronome)).unwrap();
     }
 
+    pub fn remove_audio_source(&self, audio_source_id: AudioSourceID) {
+        self.sender
+            .send(Command::RemoveAudioSource(audio_source_id))
+            .unwrap();
+    }
+
     pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> AudioSource {
         self.sender
             .send(Command::GetAudioSourceClone(audio_source_id))
@@ -110,8 +128,26 @@ pub struct AudioEngine {
     volume: f64,
     beats_per_second: f64,
     feedback: bool,
-    sources: HashMap<AudioSourceID, AudioSource>,
+    sources: Arc<HashMap<AudioSourceID, Arc<AudioSource>>>,
     next_audio_id: AudioSourceID,
+    history: crate::deligate::History<AudioEngineHistory>,
+}
+
+#[derive(Clone, druid::Data)]
+pub struct AudioEngineHistory {
+    beats_per_second: f64,
+    sources: Arc<HashMap<AudioSourceID, Arc<AudioSource>>>,
+    next_audio_id: AudioSourceID,
+}
+
+impl AudioEngineHistory {
+    pub fn from_audio_engine(audio_engine: &AudioEngine) -> Self {
+        Self {
+            beats_per_second: audio_engine.beats_per_second.clone(),
+            sources: audio_engine.sources.clone(),
+            next_audio_id: audio_engine.next_audio_id.clone(),
+        }
+    }
 }
 
 impl AudioEngine {
@@ -127,8 +163,9 @@ impl AudioEngine {
                 beats_per_second: 120.0 / 60.0,
                 receiver: e_receiver,
                 sender: e_sender,
-                sources: HashMap::new(),
+                sources: Arc::new(HashMap::new()),
                 next_audio_id: AudioSourceID(0),
+                history: crate::deligate::History::new(),
             },
             AudioEngineHandle {
                 sender: std::sync::Arc::new(h_sender),
@@ -137,7 +174,16 @@ impl AudioEngine {
         )
     }
 
+    pub fn revert(&mut self, history: AudioEngineHistory) {
+        self.beats_per_second = history.beats_per_second;
+        self.sources = history.sources;
+        self.next_audio_id = history.next_audio_id;
+    }
+
     pub fn run(mut self) {
+        self.history
+            .update_current_data(&AudioEngineHistory::from_audio_engine(&self));
+
         std::thread::spawn(|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let host = cpal::default_host();
 
@@ -192,7 +238,7 @@ impl AudioEngine {
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     for sample in data {
-                        if let Err(_e) = producer.push(*sample) {
+                        if let Err(e) = producer.push(*sample) {
                             //error!("output stream fell behind '{}', increase latency", e);
                         }
                     }
@@ -208,6 +254,21 @@ impl AudioEngine {
                     for sample in data {
                         if let Ok(cmd) = self.receiver.try_recv() {
                             match cmd {
+                                Command::LogHistory => {
+                                    if self
+                                        .history
+                                        .log_history(&AudioEngineHistory::from_audio_engine(&self))
+                                        .is_some()
+                                    {
+                                        log::info!("Logged audio engine history");
+                                    }
+                                }
+                                Command::RevertHistory(history_id) => {
+                                    if let Some(state) = self.history.revert_to(history_id) {
+                                        self.revert(state);
+                                        log::info!("Reverted audio engine history");
+                                    }
+                                }
                                 Command::SetPlaying(val) => {
                                     playing = val;
                                     recording &= val;
@@ -241,8 +302,10 @@ impl AudioEngine {
 
                                             let format = recording_clip.format();
 
-                                            self.sources
-                                                .insert(id, AudioSource::AudioClip(recording_clip));
+                                            Arc::make_mut(&mut self.sources).insert(
+                                                id,
+                                                Arc::new(AudioSource::AudioClip(recording_clip)),
+                                            );
 
                                             self.sender
                                                 .send(CommandResponse::SetRecording(Some((
@@ -265,12 +328,12 @@ impl AudioEngine {
                                 Command::SetVolume(volume) => self.volume = volume,
                                 Command::SetMetronome(m) => metronome = m,
                                 Command::RemoveAudioSource(audio_source_id) => {
-                                    self.sources.remove(&audio_source_id);
+                                    Arc::make_mut(&mut self.sources).remove(&audio_source_id);
                                 }
                                 Command::GetAudioSourceClone(audio_source_id) => {
                                     self.sender
                                         .send(CommandResponse::GetAudioSourceClone(
-                                            self.sources[&audio_source_id].clone(),
+                                            (*self.sources[&audio_source_id].clone()).clone(),
                                         ))
                                         .unwrap();
                                 }

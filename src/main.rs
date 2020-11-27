@@ -130,10 +130,10 @@ pub struct AppState {
     pub shown_audio_blocks: Arc<Vec<AudioBlockID>>,
     pub next_audio_block_id: AudioBlockID,
     pub audio_engine_handle: audio::AudioEngineHandle,
-
     pub selected_audio_block: Option<AudioBlockID>,
     pub selected_audio_source_clone: Option<audio_source::AudioSource>,
     pub beats_per_minute: f64,
+
     pub playing: bool,
     pub recording: bool,
     pub feedback: bool,
@@ -141,21 +141,43 @@ pub struct AppState {
     pub volume: f64,
 }
 
-impl AppState {
-    pub fn history_changed(&self, other: &Self) -> bool {
-        !(self.arrangement.same(&other.arrangement)
-            && self.audio_blocks.same(&other.audio_blocks)
-            && self.shown_audio_blocks.same(&other.shown_audio_blocks)
-            && self.next_audio_block_id.same(&other.next_audio_block_id)
-            && self.audio_engine_handle.same(&other.audio_engine_handle))
-    }
+#[derive(Clone, Data)]
+pub struct AppStateHistory {
+    pub arrangement: arrangement::Arrangement,
+    pub audio_blocks: Arc<HashMap<AudioBlockID, AudioBlock>>,
+    pub shown_audio_blocks: Arc<Vec<AudioBlockID>>,
+    pub next_audio_block_id: AudioBlockID,
+    pub audio_engine_handle: audio::AudioEngineHandle,
+    pub selected_audio_block: Option<AudioBlockID>,
+    pub selected_audio_source_clone: Option<audio_source::AudioSource>,
+    pub beats_per_minute: f64,
+}
 
-    pub fn revert(&mut self, other: Self) {
+impl AppStateHistory {
+    pub fn from_app_state(app_state: &AppState) -> Self {
+        Self {
+            arrangement: app_state.arrangement.clone(),
+            audio_blocks: app_state.audio_blocks.clone(),
+            shown_audio_blocks: app_state.shown_audio_blocks.clone(),
+            next_audio_block_id: app_state.next_audio_block_id.clone(),
+            audio_engine_handle: app_state.audio_engine_handle.clone(),
+            selected_audio_block: app_state.selected_audio_block.clone(),
+            selected_audio_source_clone: app_state.selected_audio_source_clone.clone(),
+            beats_per_minute: app_state.beats_per_minute.clone(),
+        }
+    }
+}
+
+impl AppState {
+    pub fn revert(&mut self, other: AppStateHistory) {
         self.arrangement = other.arrangement;
         self.audio_blocks = other.audio_blocks;
         self.shown_audio_blocks = other.shown_audio_blocks;
         self.next_audio_block_id = other.next_audio_block_id;
         self.audio_engine_handle = other.audio_engine_handle;
+        self.selected_audio_block = other.selected_audio_block;
+        self.selected_audio_source_clone = other.selected_audio_source_clone;
+        self.beats_per_minute = other.beats_per_minute;
     }
 }
 

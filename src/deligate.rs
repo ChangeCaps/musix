@@ -1,32 +1,93 @@
-use crate::{commands, AppState};
+use crate::{commands, AppState, AppStateHistory};
 use druid::*;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Hash, PartialEq, Debug)]
+pub struct HistoryID(u64);
+
+pub struct History<T> {
+    history: Vec<(T, HistoryID)>,
+    current_data: Option<T>,
+}
+
 pub struct Deligate {
-    history: Vec<AppState>,
-    current_data: Option<AppState>,
+    history: History<AppStateHistory>,
 }
 
 impl Default for Deligate {
     fn default() -> Self {
         Self {
-            history: Vec::new(),
-            current_data: None,
+            history: History::new(),
         }
     }
 }
 
-impl Deligate {
-    pub fn log_history(&mut self, data: &AppState) {
+impl<T: Data> History<T> {
+    pub fn new() -> Self {
+        Self {
+            history: Vec::new(),
+            current_data: None,
+        }
+    }
+
+    pub fn update_current_data(&mut self, data: &T) {
+        if let None = self.current_data {
+            self.current_data = Some(data.clone());
+        }
+    }
+
+    pub fn log_history(&mut self, data: &T) -> Option<HistoryID> {
         if let Some(current_data) = &self.current_data {
-            if current_data.history_changed(data) {
-                return;
+            if current_data.same(&data) {
+                return None;
             }
         }
 
         if let Some(current_data) = std::mem::replace(&mut self.current_data, Some(data.clone())) {
-            self.history.push(current_data);
+            let mut last_history_id = self
+                .history
+                .last()
+                .map(|(_, id)| *id)
+                .unwrap_or(HistoryID(0));
+
+            last_history_id.0 += 1;
+
+            self.history.push((current_data, last_history_id));
+
+            Some(last_history_id)
+        } else {
+            None
         }
+    }
+
+    pub fn clear(&mut self, data: &T) {
+        self.history.clear();
+        self.current_data = Some(data.clone());
+    }
+
+    pub fn len(&self) -> usize {
+        self.history.len()
+    }
+
+    pub fn revert(&mut self) -> Option<(T, HistoryID)> {
+        self.history.pop().map(|state| {
+            self.current_data = Some(state.0.clone());
+            state
+        })
+    }
+
+    pub fn revert_to(&mut self, target_history_id: HistoryID) -> Option<T> {
+        while let Some((_, history_id)) = self.history.last() {
+            if history_id.0 > target_history_id.0 {
+                self.history.pop();
+            } else if history_id.0 < target_history_id.0 {
+                return None;
+            } else {
+                return Some(self.history.pop().unwrap().0);
+            }
+        }
+
+        return None;
     }
 }
 
@@ -39,11 +100,19 @@ impl druid::AppDelegate<AppState> for Deligate {
         data: &mut AppState,
         _env: &Env,
     ) -> Option<Event> {
-        if self.current_data.is_none() {
-            self.current_data = Some(data.clone());
+        if self.history.current_data.is_none() {
+            self.history.current_data = Some(AppStateHistory::from_app_state(data));
         }
 
         match event {
+            Event::KeyDown(key_event)
+                if key_event.key_code == KeyCode::KeyZ
+                    && key_event.mods.ctrl
+                    && key_event.mods.shift =>
+            {
+                ctx.submit_command(druid::commands::REDO, Target::Global);
+            }
+
             Event::KeyDown(key_event)
                 if key_event.key_code == KeyCode::KeyZ && key_event.mods.ctrl =>
             {
@@ -58,7 +127,7 @@ impl druid::AppDelegate<AppState> for Deligate {
 
     fn command(
         &mut self,
-        _ctx: &mut DelegateCtx,
+        ctx: &mut DelegateCtx,
         _target: Target,
         cmd: &Command,
         data: &mut crate::AppState,
@@ -70,7 +139,7 @@ impl druid::AppDelegate<AppState> for Deligate {
 
                 log::info!("Added Track");
 
-                self.log_history(data);
+                ctx.submit_command(commands::GLOBAL_LOG_HISTORY, Target::Global);
 
                 false
             }
@@ -81,7 +150,7 @@ impl druid::AppDelegate<AppState> for Deligate {
 
                 log::info!("Removed Track {}", index);
 
-                self.log_history(data);
+                ctx.submit_command(commands::GLOBAL_LOG_HISTORY, Target::Global);
 
                 false
             }
@@ -105,7 +174,7 @@ impl druid::AppDelegate<AppState> for Deligate {
                         .get_audio_source_clone(audio_blocks.audio_id),
                 );
 
-                self.log_history(data);
+                ctx.submit_command(commands::GLOBAL_LOG_HISTORY, Target::Global);
 
                 false
             }
@@ -122,14 +191,14 @@ impl druid::AppDelegate<AppState> for Deligate {
                 Arc::make_mut(&mut data.audio_blocks).remove(id);
                 data.arrangement.remove_audio_block(*id);
 
-                self.history.clear();
-                self.current_data = Some(data.clone());
-
                 false
             }
 
             _ if cmd.is(commands::GLOBAL_LOG_HISTORY) => {
-                self.log_history(data);
+                self.history
+                    .log_history(&AppStateHistory::from_app_state(data));
+
+                data.audio_engine_handle.log_history();
 
                 false
             }
@@ -137,9 +206,9 @@ impl druid::AppDelegate<AppState> for Deligate {
             _ if cmd.is(druid::commands::UNDO) => {
                 log::info!("Undo {}", self.history.len());
 
-                if let Some(new_data) = self.history.pop() {
+                if let Some((new_data, history_id)) = self.history.revert() {
                     data.revert(new_data);
-                    self.current_data = Some(data.clone());
+                    data.audio_engine_handle.revert_history(history_id);
                 }
 
                 false
