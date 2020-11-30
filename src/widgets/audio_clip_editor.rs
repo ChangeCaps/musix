@@ -1,5 +1,5 @@
 use crate::{audio_clip::AudioClip, theme, AudioBlock};
-use druid::*;
+use druid::{kurbo::BezPath, *};
 
 pub struct AudioClipEditor {
     scroll: f64,
@@ -166,23 +166,24 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
             let bar_frames =
                 (env.get(theme::AUDIO_CLIP_EDITOR_RESOLUTION) * format.sample_rate as f64) as u32;
 
+            let mut bez_path = BezPath::new();
+
+            bez_path.move_to((0.0, size.height / 2.0));
+
             for bar in 0..num_bars {
                 let bar_height = audio_clip
                     .get_sample(bar * bar_frames, 0, format.beats_per_second)
                     .unwrap_or(0.0) as f64;
 
-                let rect = Rect::from_center_size(
-                    (
-                        bar as f64 * bar_width
-                            + bar_width / 2.0
-                            + audio_block.offset as f64 * scale / format.beats_per_second,
-                        size.height / 2.0,
-                    ),
-                    (bar_width + 1.0, bar_height * 300.0),
-                );
-
-                ctx.fill(rect, &env.get(theme::AUDIO_CLIP_EDITOR_BAR_COLOR));
+                bez_path.line_to((
+                    bar as f64 * bar_width
+                        + bar_width / 2.0
+                        + audio_block.offset as f64 * scale / format.beats_per_second,
+                    size.height / 2.0 + bar_height * 300.0,
+                ));
             }
+
+            ctx.stroke(bez_path, &env.get(theme::AUDIO_CLIP_EDITOR_BAR_COLOR), 2.0);
 
             let circle = kurbo::Circle::new((0.0, size.height / 2.0), 4.0);
 
