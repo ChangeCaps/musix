@@ -54,6 +54,8 @@ impl<T: Data> History<T> {
 
             self.history.push((current_data, last_history_id));
 
+            log::info!("Logged history");
+
             Some(last_history_id)
         } else {
             None

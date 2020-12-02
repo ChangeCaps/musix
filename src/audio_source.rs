@@ -1,10 +1,21 @@
 use crate::{audio_clip::AudioClip, AppState};
 use druid::*;
+use serde::{Serialize, Deserialize};
+use std::sync::Arc;
+
+#[derive(Clone, Debug, druid::Data, PartialEq, Serialize, Deserialize)]
+pub struct AudioSourceFormat {
+    pub sample_rate: u32,
+    pub len_frames: u32,
+    pub channels: u32,
+    pub beats_per_second: f64,
+}
+
 
 // i actually use an enum now and i don't want to hurt myself anymore
-#[derive(Clone, Data)]
+#[derive(Clone, Data, Serialize, Deserialize)]
 pub enum AudioSource {
-    AudioClip(AudioClip),
+    AudioClip(Arc<AudioClip>),
 }
 
 impl AudioSource {

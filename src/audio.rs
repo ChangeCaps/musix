@@ -1,4 +1,4 @@
-use crate::{arrangement::*, audio_clip::AudioClip, audio_source::AudioSource, commands::*};
+use crate::{arrangement::*, audio_clip::AudioClip, audio_source::*, commands::*};
 use cpal::traits::*;
 use druid::Target;
 use log::*;
@@ -25,11 +25,13 @@ pub enum Command {
     SetMetronome(bool),
     RemoveAudioSource(AudioSourceID),
     GetAudioSourceClone(AudioSourceID),
+    DownloadAudioSources,
     SetArrangementAudioSourceIndex(ArrangementAudioSourceIndex),
 }
 
 pub enum CommandResponse {
     SetRecording(Option<(AudioSourceID, AudioSourceFormat)>),
+    DownloadAudioSources(Arc<HashMap<AudioSourceID, AudioSource>>),
     GetAudioSourceClone(AudioSource),
 }
 
@@ -67,7 +69,7 @@ impl AudioEngineHandle {
 
         match self.receiver.recv().unwrap() {
             CommandResponse::SetRecording(v) => v,
-            CommandResponse::GetAudioSourceClone(_) => panic!("wrong response wtf"),
+            _ => panic!("wrong response wtf"),
         }
     }
 
@@ -95,14 +97,23 @@ impl AudioEngineHandle {
             .unwrap();
     }
 
+    pub fn download_audio_sources(&self) -> Arc<HashMap<AudioSourceID, AudioSource>> {
+        self.sender.send(Command::DownloadAudioSources).unwrap();
+
+        match self.receiver.recv().unwrap() {
+            CommandResponse::DownloadAudioSources(v) => v,
+            _ => panic!("fucking wrong respose, how does this even happen, like it's probably a deta-race kinda thing, but like, you shouldn't see this error message")
+        }
+    }
+
     pub fn get_audio_source_clone(&self, audio_source_id: AudioSourceID) -> AudioSource {
         self.sender
             .send(Command::GetAudioSourceClone(audio_source_id))
             .unwrap();
 
         match self.receiver.recv().unwrap() {
-            CommandResponse::SetRecording(_) => panic!("wrong response wtf"),
             CommandResponse::GetAudioSourceClone(v) => v,
+            _ => panic!("wrong response wtf"),
         }
     }
 
@@ -113,14 +124,6 @@ impl AudioEngineHandle {
     }
 }
 
-#[derive(Clone, Debug, druid::Data, PartialEq)]
-pub struct AudioSourceFormat {
-    pub sample_rate: u32,
-    pub len_frames: u32,
-    pub channels: u32,
-    pub beats_per_second: f64,
-}
-
 pub struct AudioEngine {
     receiver: Receiver<Command>,
     sender: Sender<CommandResponse>,
@@ -128,7 +131,7 @@ pub struct AudioEngine {
     volume: f64,
     beats_per_second: f64,
     feedback: bool,
-    sources: Arc<HashMap<AudioSourceID, Arc<AudioSource>>>,
+    sources: Arc<HashMap<AudioSourceID, AudioSource>>,
     next_audio_id: AudioSourceID,
     history: crate::deligate::History<AudioEngineHistory>,
 }
@@ -136,7 +139,7 @@ pub struct AudioEngine {
 #[derive(Clone, druid::Data)]
 pub struct AudioEngineHistory {
     beats_per_second: f64,
-    sources: Arc<HashMap<AudioSourceID, Arc<AudioSource>>>,
+    sources: Arc<HashMap<AudioSourceID, AudioSource>>,
     next_audio_id: AudioSourceID,
 }
 
@@ -304,7 +307,7 @@ impl AudioEngine {
 
                                             Arc::make_mut(&mut self.sources).insert(
                                                 id,
-                                                Arc::new(AudioSource::AudioClip(recording_clip)),
+                                                AudioSource::AudioClip(Arc::new(recording_clip)),
                                             );
 
                                             self.sender
@@ -330,10 +333,11 @@ impl AudioEngine {
                                 Command::RemoveAudioSource(audio_source_id) => {
                                     Arc::make_mut(&mut self.sources).remove(&audio_source_id);
                                 }
+                                Command::DownloadAudioSources => self.sender.send(CommandResponse::DownloadAudioSources(self.sources.clone())).unwrap(),
                                 Command::GetAudioSourceClone(audio_source_id) => {
                                     self.sender
                                         .send(CommandResponse::GetAudioSourceClone(
-                                            (*self.sources[&audio_source_id].clone()).clone(),
+                                            self.sources[&audio_source_id].clone().clone(),
                                         ))
                                         .unwrap();
                                 }

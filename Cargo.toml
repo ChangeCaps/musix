@@ -10,6 +10,6 @@ edition = "2018"
 druid = "*"
 log = "*"
 simple_logger = "*"
-serde = { version = "*", features = ["derive"] }
+serde = { version = "*", features = ["derive", "rc"] }
 cpal = "0.13.1"
 ringbuf = "0.2.2"

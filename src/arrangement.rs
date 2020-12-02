@@ -1,5 +1,6 @@
 use crate::{
-    audio::{AudioSourceFormat, AudioSourceID},
+    audio::AudioSourceID,
+    audio_source::AudioSourceFormat,
     widgets::arrangement::*,
     AudioBlock, AudioBlockID,
 };

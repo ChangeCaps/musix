@@ -95,7 +95,7 @@ pub struct AudioBlockID(pub usize);
 #[derive(Clone, Data, Lens)]
 pub struct AudioBlock {
     audio_id: audio::AudioSourceID,
-    format: audio::AudioSourceFormat,
+    format: audio_source::AudioSourceFormat,
     offset: f32,
     len_beats: usize,
     true_len_beats: usize,
@@ -105,7 +105,7 @@ pub struct AudioBlock {
 impl AudioBlock {
     pub fn new(
         audio_id: audio::AudioSourceID,
-        format: audio::AudioSourceFormat,
+        format: audio_source::AudioSourceFormat,
         beats_per_second: f64,
     ) -> Self {
         let true_len_beats = (format.len_frames as f64 / format.sample_rate as f64

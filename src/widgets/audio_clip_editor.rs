@@ -1,5 +1,6 @@
 use crate::{audio_clip::AudioClip, theme, AudioBlock};
 use druid::{kurbo::BezPath, *};
+use std::sync::Arc;
 
 pub struct AudioClipEditor {
     scroll: f64,
@@ -17,12 +18,12 @@ impl AudioClipEditor {
     }
 }
 
-impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
+impl Widget<(Arc<AudioClip>, AudioBlock)> for AudioClipEditor {
     fn event(
         &mut self,
         ctx: &mut EventCtx,
         event: &Event,
-        (audio_clip, audio_block): &mut (AudioClip, AudioBlock),
+        (audio_clip, audio_block): &mut (Arc<AudioClip>, AudioBlock),
         env: &Env,
     ) {
         let size = ctx.size();
@@ -88,7 +89,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
         &mut self,
         _ctx: &mut LifeCycleCtx,
         _event: &LifeCycle,
-        _data: &(AudioClip, AudioBlock),
+        _data: &(Arc<AudioClip>, AudioBlock),
         _env: &Env,
     ) {
     }
@@ -96,8 +97,8 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
     fn update(
         &mut self,
         _ctx: &mut UpdateCtx,
-        _old_data: &(AudioClip, AudioBlock),
-        _data: &(AudioClip, AudioBlock),
+        _old_data: &(Arc<AudioClip>, AudioBlock),
+        _data: &(Arc<AudioClip>, AudioBlock),
         _env: &Env,
     ) {
     }
@@ -106,7 +107,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
         &mut self,
         _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        _data: &(AudioClip, AudioBlock),
+        _data: &(Arc<AudioClip>, AudioBlock),
         _env: &Env,
     ) -> Size {
         Size::new(bc.max().width, bc.max().height)
@@ -115,7 +116,7 @@ impl Widget<(AudioClip, AudioBlock)> for AudioClipEditor {
     fn paint(
         &mut self,
         ctx: &mut PaintCtx,
-        (audio_clip, audio_block): &(AudioClip, AudioBlock),
+        (audio_clip, audio_block): &(Arc<AudioClip>, AudioBlock),
         env: &Env,
     ) {
         let size = ctx.size();
